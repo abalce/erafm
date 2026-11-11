@@ -1,7 +1,7 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Backend -- last.fm"
+description = "Erafm: backend do importu i analizy historii Last.fm"
 readme = "README.md"
 authors = [
     { name = "Angelika", email = "abalcerzak22@gmail.com" }

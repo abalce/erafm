@@ -18,6 +18,8 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY README.md alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
+# Prawo odczytu dla wszystkich: obraz nie zależy od uprawnień plików na dysku
+RUN chmod -R a+rX pyproject.toml uv.lock README.md alembic.ini migrations src
 RUN uv sync --frozen --no-dev
 
 # Aplikacja nie działa jako root

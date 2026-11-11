@@ -10,7 +10,7 @@ from .db import engine
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="StatsMusic 2.0")
+app = FastAPI(title="Erafm")
 
 app.add_middleware(
     CORSMiddleware,
