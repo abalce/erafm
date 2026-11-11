@@ -8,3 +8,7 @@ build/
 .pytest_cache/
 .ruff_cache/
 .vscode/
+
+# Lokalne instrukcje dla Claude Code (nie do repo)
+CLAUDE.md
+docs/
