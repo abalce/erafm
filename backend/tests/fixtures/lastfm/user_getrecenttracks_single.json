@@ -1,0 +1,15 @@
+{
+  "recenttracks": {
+    "track": {
+      "artist": {"mbid": "", "#text": "Jedyny Artysta"},
+      "streamable": "0",
+      "image": [{"size": "small", "#text": ""}],
+      "mbid": "",
+      "album": {"mbid": "", "#text": "Jedyny Album"},
+      "name": "Jedyny Utwór",
+      "url": "https://www.last.fm/music/Jedyny+Artysta/_/Jedyny+Utw%C3%B3r",
+      "date": {"uts": "1666600000", "#text": "24 Oct 2022, 08:26"}
+    },
+    "@attr": {"user": "Przykladowa", "totalPages": "1", "page": "1", "perPage": "200", "total": "1"}
+  }
+}

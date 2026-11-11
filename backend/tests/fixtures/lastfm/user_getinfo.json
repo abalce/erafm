@@ -1,0 +1,15 @@
+{
+  "user": {
+    "name": "Przykladowa",
+    "realname": "",
+    "url": "https://www.last.fm/user/Przykladowa",
+    "country": "None",
+    "playcount": "12345",
+    "artist_count": "678",
+    "track_count": "2345",
+    "album_count": "901",
+    "registered": {"unixtime": "1666552519", "#text": 1666552519},
+    "image": [{"size": "small", "#text": ""}],
+    "type": "user"
+  }
+}

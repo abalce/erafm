@@ -1,0 +1,43 @@
+{
+  "recenttracks": {
+    "track": [
+      {
+        "artist": {"mbid": "", "#text": "Artysta Teraz"},
+        "streamable": "0",
+        "image": [{"size": "small", "#text": ""}],
+        "mbid": "",
+        "album": {"mbid": "", "#text": "Album Teraz"},
+        "name": "Grane Teraz",
+        "@attr": {"nowplaying": "true"},
+        "url": "https://www.last.fm/music/Artysta+Teraz/_/Grane+Teraz"
+      },
+      {
+        "artist": {"mbid": "a74b1b7f-71a5-4011-9441-d0b5e4122711", "#text": "Radiohead"},
+        "streamable": "0",
+        "image": [{"size": "small", "#text": ""}],
+        "mbid": "",
+        "album": {"mbid": "", "#text": "In Rainbows"},
+        "name": "Reckoner",
+        "url": "https://www.last.fm/music/Radiohead/_/Reckoner",
+        "date": {"uts": "1731340000", "#text": "11 Nov 2024, 15:46"}
+      },
+      {
+        "artist": {"mbid": "", "#text": "Mało Znany Zespół"},
+        "streamable": "0",
+        "image": [{"size": "small", "#text": ""}],
+        "mbid": "",
+        "album": {"mbid": "", "#text": ""},
+        "name": "Singiel",
+        "url": "https://www.last.fm/music/Ma%C5%82o+Znany+Zesp%C3%B3%C5%82/_/Singiel",
+        "date": {"uts": "1731339700", "#text": "11 Nov 2024, 15:41"}
+      }
+    ],
+    "@attr": {
+      "user": "Przykladowa",
+      "totalPages": "6173",
+      "page": "1",
+      "perPage": "2",
+      "total": "12345"
+    }
+  }
+}
