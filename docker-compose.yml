@@ -17,6 +17,7 @@ services:
 
   api:
     build: ./backend
+    image: erafm-backend
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://statsmusic:statsmusic@db:5432/statsmusic
@@ -24,6 +25,27 @@ services:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+    # Zdrowe API oznacza, że migracje już przeszły (uruchamia je start kontenera)
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://localhost:8000/health", timeout=3)
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    # Ten sam obraz co API, inna komenda
+    image: erafm-backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://statsmusic:statsmusic@db:5432/statsmusic
+    command: ["procrastinate", "--app=backend.worker.app", "worker"]
+    depends_on:
+      api:
         condition: service_healthy
 
 volumes:
