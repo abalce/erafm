@@ -7,10 +7,12 @@ przerwany import da się wznowić bez dziur i bez powtórek.
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from pydantic import BaseModel
 from sqlalchemy import Connection, Engine, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +35,14 @@ logger = logging.getLogger(__name__)
 # (Last.fm nie przyjmuje scrobbli utworów krótszych niż 30 s)
 DUPLICATE_WINDOW = timedelta(seconds=30)
 
+# Import bez postępu przez tyle czasu uznajemy za przerwany (np. restart workera).
+# Najdłuższa uczciwa przerwa to 5 prób jednego zapytania, czyli ok. 90 s.
+STALLED_AFTER = timedelta(minutes=3)
+
+# Oficjalnych zasad nicków Last.fm nie znamy, więc odrzucamy tylko to, co na pewno
+# nie jest nickiem: pusty tekst, spacje, ukośniki i wszystko dłuższe niż kolumna w bazie
+_USERNAME_RE = re.compile(r"[^\s/]{1,64}")
+
 # Pierwsza część klucza blokady w Postgresie (pg_advisory_lock); druga to id osoby
 _IMPORT_LOCK_KEY = 1
 
@@ -40,6 +50,10 @@ _IMPORT_LOCK_KEY = 1
 def normalize_username(username: str) -> str:
     """Nick w postaci, w jakiej trzymamy go w bazie: Last.fm nie rozróżnia wielkości liter."""
     return username.strip().lower()
+
+
+def is_valid_username(username: str) -> bool:
+    return _USERNAME_RE.fullmatch(username) is not None
 
 
 def _name_key(name: str) -> str:
@@ -65,7 +79,11 @@ async def run_full_import(
     żeby nie blokować pętli zdarzeń workera.
     """
     username = normalize_username(username)
-    job_id, user_id = await asyncio.to_thread(_open_job, db, username)
+    job = await asyncio.to_thread(open_import, db, username)
+    if job is None:
+        logger.info("Historia %s jest już zaimportowana, pomijam", username)
+        return
+    job_id, user_id = job
 
     lock = await asyncio.to_thread(_acquire_lock, db, user_id)
     if lock is None:
@@ -123,8 +141,12 @@ def _error_code(exc: Exception) -> str:
 # --- Zadanie importu w bazie (synchroniczne) ---------------------------------------------
 
 
-def _open_job(db: Engine, username: str) -> tuple[int, int]:
-    """Zwraca (id zadania, id osoby): trwający lub przerwany import albo nowy."""
+def open_import(db: Engine, username: str) -> tuple[int, int] | None:
+    """Zwraca (id zadania, id osoby) importu do wykonania: trwającego, przerwanego albo
+    nowego. None, gdy historia osoby jest już zaimportowana i nie ma nic do zrobienia.
+
+    `username` musi być znormalizowany (`normalize_username`).
+    """
     try:
         return _find_or_create_job(db, username)
     except IntegrityError:
@@ -133,7 +155,7 @@ def _open_job(db: Engine, username: str) -> tuple[int, int]:
         return _find_or_create_job(db, username)
 
 
-def _find_or_create_job(db: Engine, username: str) -> tuple[int, int]:
+def _find_or_create_job(db: Engine, username: str) -> tuple[int, int] | None:
     with Session(db) as session:
         # Osoba powstaje przed pierwszym zapytaniem do Last.fm, żeby błąd (np. brak
         # takiego konta) miał swoje zadanie; prawdziwą pisownię nicka dopiszemy z profilu
@@ -149,7 +171,9 @@ def _find_or_create_job(db: Engine, username: str) -> tuple[int, int]:
             .order_by(SyncJob.id.desc())
             .limit(1)
         ).first()
-        if job is None or job.status == "done":
+        if job is not None and job.status == "done":
+            return None
+        if job is None:
             # Last.fm liczy czas w pełnych sekundach
             job = SyncJob(
                 user_id=user_id, kind="full", to_ts=datetime.now(UTC).replace(microsecond=0)
@@ -196,6 +220,66 @@ def _mark_failed(db: Engine, job_id: int, code: str) -> None:
         job.status = "failed"
         job.error = code
         session.commit()
+
+
+# --- Stan importu dla API i wznawianie przerwanych importów -------------------------------
+
+
+class ImportStatus(BaseModel):
+    username: str
+    display_name: str
+    status: str  # pending, running, done albo failed
+    progress: int  # procent zapisanych stron, 0-100
+    error: str | None  # kod błędu, gdy status to failed
+    last_synced_at: datetime | None
+
+
+def import_status(db: Engine, username: str) -> ImportStatus | None:
+    """Stan ostatniego importu osoby; None, gdy nigdy jej nie importowaliśmy."""
+    with Session(db) as session:
+        row = session.execute(
+            select(LfmUser, SyncJob)
+            .join(SyncJob, SyncJob.user_id == LfmUser.id)
+            .where(LfmUser.username == username)
+            .order_by(SyncJob.id.desc())
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        user, job = row
+        return ImportStatus(
+            username=user.username,
+            display_name=user.display_name,
+            status=job.status,
+            progress=_progress(job),
+            error=job.error,
+            last_synced_at=user.last_synced_at,
+        )
+
+
+def _progress(job: SyncJob) -> int:
+    if job.status == "done":
+        return 100
+    if not job.total_pages:
+        return 0
+    # Zaokrąglamy w dół: 100% pokazujemy dopiero po zakończeniu importu
+    return min(99, job.pages_done * 100 // job.total_pages)
+
+
+def stalled_imports(db: Engine) -> list[str]:
+    """Nicki osób, których import jest w toku, ale od dawna nie zrobił postępu."""
+    with Session(db) as session:
+        return list(
+            session.scalars(
+                select(LfmUser.username)
+                .join(SyncJob, SyncJob.user_id == LfmUser.id)
+                .where(
+                    SyncJob.status.in_(("pending", "running")),
+                    SyncJob.updated_at < func.now() - STALLED_AFTER,
+                )
+                .order_by(LfmUser.username)
+            )
+        )
 
 
 # --- Blokada: jedna osoba importowana najwyżej przez jedno zadanie naraz -----------------

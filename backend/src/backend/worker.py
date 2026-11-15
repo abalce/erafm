@@ -5,13 +5,14 @@ Zlecenie zadania z terminala: `procrastinate --app=backend.worker.app defer back
 Import historii: `... defer backend.worker.import_full '{"username": "nick"}'`
 """
 
+import asyncio
 import logging
 
 import procrastinate
 
 from .config import settings
 from .db import engine
-from .importer import run_full_import
+from .importer import run_full_import, stalled_imports
 from .lastfm import LastfmClient
 
 logger = logging.getLogger(__name__)
@@ -49,3 +50,32 @@ def _lastfm_client() -> LastfmClient:
 async def import_full(username: str) -> None:
     """Importuje całą historię odsłuchów osoby albo wznawia przerwany import."""
     await run_full_import(_lastfm_client(), engine, username)
+
+
+def _import_of(username: str) -> procrastinate.jobs.JobDeferrer:
+    # queueing_lock: w kolejce czeka najwyżej jedno zlecenie importu tej osoby
+    return import_full.configure(queueing_lock=f"import:{username}")
+
+
+def defer_import(username: str) -> None:
+    """Zleca import osoby (dla API). Nic nie robi, gdy takie zlecenie już czeka."""
+    try:
+        _import_of(username).defer(username=username)
+    except procrastinate.exceptions.AlreadyEnqueued:
+        logger.debug("Import %s już czeka w kolejce", username)
+
+
+@app.periodic(cron="* * * * *")
+@app.task(queueing_lock="resume_stalled_imports")
+async def resume_stalled_imports(timestamp: int) -> None:
+    """Co minutę zleca ponownie importy przerwane np. restartem workera.
+
+    Zbędne zlecenie nie szkodzi: zadanie `import_full` kończy od razu, gdy import tej
+    osoby naprawdę trwa (blokada w bazie).
+    """
+    for username in await asyncio.to_thread(stalled_imports, engine):
+        try:
+            await _import_of(username).defer_async(username=username)
+            logger.info("Wznawiam przerwany import %s", username)
+        except procrastinate.exceptions.AlreadyEnqueued:
+            logger.debug("Import %s już czeka w kolejce", username)

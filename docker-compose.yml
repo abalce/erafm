@@ -43,7 +43,14 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://statsmusic:statsmusic@db:5432/statsmusic
-    command: ["procrastinate", "--app=backend.worker.app", "worker"]
+    # Do 3 zadań naraz (np. importy dwóch osób i okresowe wznawianie); limit zapytań do
+    # Last.fm i tak jest wspólny. Udane zadania znikają z kolejki: ich stan jest w sync_job.
+    command:
+      - procrastinate
+      - --app=backend.worker.app
+      - worker
+      - --concurrency=3
+      - --delete-jobs=successful
     depends_on:
       api:
         condition: service_healthy
