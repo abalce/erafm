@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -94,6 +95,13 @@ class SyncJob(Base):
         CheckConstraint("kind IN ('full', 'incremental')", name="kind"),
         CheckConstraint("status IN ('pending', 'running', 'done', 'failed')", name="status"),
         Index("ix_sync_job_user_created", "user_id", "created_at"),
+        # Najwyżej jeden trwający import na osobę: pilnuje tego baza, nie kod
+        Index(
+            "uq_sync_job_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running')"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -104,7 +112,11 @@ class SyncJob(Base):
     from_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     to_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     total_pages: Mapped[int | None] = mapped_column(Integer)
-    last_page_done: Mapped[int] = mapped_column(Integer, server_default="0")
+    # Ile stron już zapisano. Import idzie od najstarszej strony (o najwyższym numerze)
+    # do najnowszej, więc następna do pobrania to `total_pages - pages_done`.
+    pages_done: Mapped[int] = mapped_column(Integer, server_default="0")
+    # Odsłuchy pominięte jako powtórki tego samego utworu w odstępie poniżej 30 s
+    duplicates_skipped: Mapped[int] = mapped_column(Integer, server_default="0")
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

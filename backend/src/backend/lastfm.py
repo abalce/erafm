@@ -1,5 +1,6 @@
 """Klient API Last.fm: limit zapytań, ponawianie po błędach i typowane odpowiedzi."""
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +16,10 @@ USER_AGENT = "Erafm/0.1 (projekt studencki)"
 MAX_REQUESTS_PER_SECOND = 4
 MAX_ATTEMPTS = 5
 MAX_PAGE_SIZE = 200
+
+# httpx na poziomie INFO wypisuje pełny adres każdego zapytania, a w nim klucz API.
+# Sekret nie może trafiać do logów, więc zostawiamy tylko ostrzeżenia i błędy.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 # --- Błędy -----------------------------------------------------------------------------
