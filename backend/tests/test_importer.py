@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from tenacity import wait_none
 
 from backend import importer
-from backend.importer import _acquire_lock, _release_lock
 from backend.lastfm import LastfmClient
+from backend.locks import IMPORT_LOCK, release_lock, try_lock
 from backend.models import Artist, LfmUser, Scrobble, SyncJob, Track
 
 pytestmark = pytest.mark.anyio
@@ -107,11 +107,11 @@ def lastfm_mock() -> Iterator[respx.MockRouter]:
 
 async def run_import(
     mock: respx.MockRouter, fake: FakeLastfm, db: Engine, username: str = "przykladowa"
-) -> None:
+) -> bool:
     mock.get(host="ws.audioscrobbler.com", path="/2.0/").mock(side_effect=fake)
     # Bez czekania między próbami i bez limitu, żeby testy były szybkie
     async with LastfmClient("test-key", max_rate=1000, retry_wait=wait_none()) as client:
-        await importer.run_import(client, db, username, page_size=2)
+        return await importer.run_import(client, db, username, page_size=2)
 
 
 def the_job(db: Engine) -> SyncJob:
@@ -254,14 +254,14 @@ async def test_import_skipped_when_another_one_holds_the_lock(
 
     with Session(clean_db) as session:
         user_id = session.scalars(select(LfmUser.id)).one()
-    lock = _acquire_lock(clean_db, user_id)
+    lock = try_lock(clean_db, IMPORT_LOCK, user_id)
     assert lock is not None
     try:
         await run_import(lastfm_mock, fake, clean_db)
         assert fake.pages_requested == []
         assert scrobble_count(clean_db) == 0
     finally:
-        _release_lock(lock, user_id)
+        release_lock(lock, IMPORT_LOCK, user_id)
 
     await run_import(lastfm_mock, fake, clean_db)
     assert scrobble_count(clean_db) == 5

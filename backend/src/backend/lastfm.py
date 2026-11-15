@@ -34,8 +34,16 @@ class LastfmError(Exception):
         self.message = message
 
 
-class UserNotFound(LastfmError):
-    """Kod 6: nie ma takiego użytkownika."""
+class NotFound(LastfmError):
+    """Kod 6: Last.fm nie zna tego, o co pytamy (użytkownika albo artysty)."""
+
+
+class UserNotFound(NotFound):
+    """Kod 6 w zapytaniach o użytkownika: nie ma takiego konta."""
+
+
+class ArtistNotFound(NotFound):
+    """Kod 6 w zapytaniach o artystę: Last.fm nie ma takiego artysty."""
 
 
 class HistoryHidden(LastfmError):
@@ -52,7 +60,7 @@ _RETRYABLE_CODES = {8, 11, 16, 29}
 
 def _error_from_code(code: int, message: str) -> LastfmError:
     if code == 6:
-        return UserNotFound(code, message)
+        return NotFound(code, message)
     if code == 17:
         return HistoryHidden(code, message)
     if code in _RETRYABLE_CODES:
@@ -121,6 +129,34 @@ class Scrobble(BaseModel):
         )
 
 
+class ArtistInfo(BaseModel):
+    listeners: int
+    playcount: int  # odsłuchy artysty na całym Last.fm
+    mbid: str | None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "ArtistInfo":
+        artist = data["artist"]
+        return cls(
+            listeners=int(artist["stats"]["listeners"]),
+            playcount=int(artist["stats"]["playcount"]),
+            mbid=_empty_to_none(artist.get("mbid")),
+        )
+
+
+class ArtistTag(BaseModel):
+    name: str
+    weight: int  # 1-100; 100 ma najczęściej nadawany tag artysty
+
+    @classmethod
+    def list_from_api(cls, data: dict[str, Any]) -> list["ArtistTag"]:
+        tags = data["toptags"].get("tag", [])
+        # Przy jednym wyniku Last.fm zwraca obiekt zamiast listy
+        if isinstance(tags, dict):
+            tags = [tags]
+        return [cls(name=t["name"], weight=int(t["count"])) for t in tags]
+
+
 class RecentTracksPage(BaseModel):
     page: int
     total_pages: int
@@ -178,22 +214,37 @@ class LastfmClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _call(self, method: str, **params: str | int) -> dict[str, Any]:
+    async def _call(
+        self, method: str, not_found: type[NotFound], **params: str | int
+    ) -> dict[str, Any]:
+        """Woła metodę API. `not_found` to wyjątek dla kodu 6, zależny od tego, o co pytamy."""
         query = {"method": method, "api_key": self._api_key, "format": "json", **params}
-        async for attempt in AsyncRetrying(
-            retry=retry_if_exception_type((RetryableError, httpx.TransportError)),
-            stop=stop_after_attempt(MAX_ATTEMPTS),
-            wait=self._retry_wait,
-            reraise=True,
-        ):
-            with attempt:
-                async with self._limiter:
-                    response = await self._http.get(API_URL, params=query)
-                return _parse_response(response)
+        try:
+            async for attempt in AsyncRetrying(
+                retry=retry_if_exception_type((RetryableError, httpx.TransportError)),
+                stop=stop_after_attempt(MAX_ATTEMPTS),
+                wait=self._retry_wait,
+                reraise=True,
+            ):
+                with attempt:
+                    async with self._limiter:
+                        response = await self._http.get(API_URL, params=query)
+                    return _parse_response(response)
+        except NotFound as exc:
+            raise not_found(exc.code, exc.message) from None
         raise AssertionError("niemożliwe: AsyncRetrying zawsze zwraca wynik albo rzuca błąd")
 
     async def get_user_info(self, username: str) -> UserInfo:
-        return UserInfo.from_api(await self._call("user.getinfo", user=username))
+        return UserInfo.from_api(await self._call("user.getinfo", UserNotFound, user=username))
+
+    async def get_artist_info(self, name: str) -> ArtistInfo:
+        # autocorrect=0: chcemy danych dokładnie tego artysty, którego mamy w scrobblach
+        data = await self._call("artist.getinfo", ArtistNotFound, artist=name, autocorrect=0)
+        return ArtistInfo.from_api(data)
+
+    async def get_artist_top_tags(self, name: str) -> list[ArtistTag]:
+        data = await self._call("artist.gettoptags", ArtistNotFound, artist=name, autocorrect=0)
+        return ArtistTag.list_from_api(data)
 
     async def get_recent_tracks(
         self,
@@ -209,4 +260,5 @@ class LastfmClient:
             params["from"] = int(from_ts.timestamp())
         if to_ts is not None:
             params["to"] = int(to_ts.timestamp())
-        return RecentTracksPage.from_api(await self._call("user.getrecenttracks", **params))
+        data = await self._call("user.getrecenttracks", UserNotFound, **params)
+        return RecentTracksPage.from_api(data)

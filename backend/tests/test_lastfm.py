@@ -12,6 +12,7 @@ from tenacity import wait_none
 
 from backend.lastfm import (
     MAX_ATTEMPTS,
+    ArtistNotFound,
     HistoryHidden,
     LastfmClient,
     RetryableError,
@@ -164,3 +165,46 @@ async def test_user_not_found_is_not_retried() -> None:
                 await lfm.get_user_info("nie-ma-takiego")
 
     assert route.call_count == 1
+
+
+async def test_artist_info_parsed() -> None:
+    with respx.mock as mock:
+        route = lastfm_route(mock).respond(json=load("artist_getinfo.json"))
+        async with make_client() as lfm:
+            info = await lfm.get_artist_info("Radiohead")
+
+    assert (info.listeners, info.playcount) == (8517127, 1435987354)
+    assert info.mbid == "a74b1b7f-71a5-4011-9441-d0b5e4122711"
+    params = route.calls.last.request.url.params
+    assert (params["method"], params["artist"]) == ("artist.getinfo", "Radiohead")
+    assert params["autocorrect"] == "0"
+
+
+async def test_artist_top_tags_parsed() -> None:
+    with respx.mock as mock:
+        lastfm_route(mock).respond(json=load("artist_gettoptags.json"))
+        async with make_client() as lfm:
+            tags = await lfm.get_artist_top_tags("Radiohead")
+
+    assert [(t.name, t.weight) for t in tags] == [
+        ("rock", 100),
+        ("alternative", 54),
+        ("alternative rock", 34),
+    ]
+
+
+async def test_artist_without_tags_gives_empty_list() -> None:
+    with respx.mock as mock:
+        lastfm_route(mock).respond(json={"toptags": {"@attr": {"artist": "Nikt"}}})
+        async with make_client() as lfm:
+            assert await lfm.get_artist_top_tags("Nikt") == []
+
+
+async def test_unknown_artist_raises_artist_not_found() -> None:
+    with respx.mock as mock:
+        lastfm_route(mock).mock(return_value=error(6, "The artist you supplied could not be found"))
+        async with make_client() as lfm:
+            with pytest.raises(ArtistNotFound) as excinfo:
+                await lfm.get_artist_info("nie ma takiego")
+
+    assert excinfo.value.code == 6

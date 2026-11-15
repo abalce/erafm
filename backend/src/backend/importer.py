@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 from pydantic import BaseModel
-from sqlalchemy import Connection, Engine, func, select, tuple_
+from sqlalchemy import Engine, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -30,6 +30,7 @@ from .lastfm import (
     UserNotFound,
 )
 from .lastfm import Scrobble as LastfmScrobble
+from .locks import IMPORT_LOCK, release_lock, try_lock
 from .models import Artist, LfmUser, Scrobble, SyncJob, Track
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,6 @@ LATE_SCROBBLE_WINDOW = timedelta(days=14)
 # Oficjalnych zasad nicków Last.fm nie znamy, więc odrzucamy tylko to, co na pewno
 # nie jest nickiem: pusty tekst, spacje, ukośniki i wszystko dłuższe niż kolumna w bazie
 _USERNAME_RE = re.compile(r"[^\s/]{1,64}")
-
-# Pierwsza część klucza blokady w Postgresie (pg_advisory_lock); druga to id osoby
-_IMPORT_LOCK_KEY = 1
 
 
 def normalize_username(username: str) -> str:
@@ -85,9 +83,9 @@ class _JobState:
 
 async def run_import(
     client: LastfmClient, db: Engine, username: str, *, page_size: int = MAX_PAGE_SIZE
-) -> None:
+) -> bool:
     """Importuje historię osoby: całą, gdy jej nie mamy, albo tylko nowe odsłuchy.
-    Wznawia też niedokończony import.
+    Wznawia też niedokończony import. Zwraca True, gdy import właśnie się zakończył.
 
     Zapisy do bazy są synchroniczne i krótkie, więc idą do osobnego wątku (`to_thread`),
     żeby nie blokować pętli zdarzeń workera.
@@ -96,23 +94,26 @@ async def run_import(
     job = await asyncio.to_thread(open_import, db, username)
     if job is None:
         logger.info("Historia %s jest świeża, pomijam", username)
-        return
+        return False
     job_id, user_id = job
 
-    lock = await asyncio.to_thread(_acquire_lock, db, user_id)
+    # Jedna osoba importowana najwyżej przez jedno zadanie naraz
+    lock = await asyncio.to_thread(try_lock, db, IMPORT_LOCK, user_id)
     if lock is None:
         logger.info("Import %s trwa już w innym zadaniu, pomijam", username)
-        return
+        return False
     try:
         await _import_pages(client, db, job_id, username, page_size)
+        return True
     except Exception as exc:
         code = _error_code(exc)
         await asyncio.to_thread(_mark_failed, db, job_id, code)
         if code == "internal_error":
             raise
         logger.warning("Import %s przerwany (%s): %s", username, code, exc)
+        return False
     finally:
-        await asyncio.to_thread(_release_lock, lock, user_id)
+        await asyncio.to_thread(release_lock, lock, IMPORT_LOCK, user_id)
 
 
 async def _import_pages(
@@ -300,33 +301,6 @@ def stalled_imports(db: Engine) -> list[str]:
                 .order_by(LfmUser.username)
             )
         )
-
-
-# --- Blokada: jedna osoba importowana najwyżej przez jedno zadanie naraz -----------------
-
-
-def _acquire_lock(db: Engine, user_id: int) -> Connection | None:
-    """Bierze blokadę importu osoby; None, gdy trzyma ją inne zadanie.
-
-    Blokada należy do połączenia z bazą: gdy worker padnie, Postgres zwalnia ją sam,
-    więc po awarii nic nie blokuje wznowienia.
-    """
-    conn = db.connect().execution_options(isolation_level="AUTOCOMMIT")
-    try:
-        if conn.scalar(select(func.pg_try_advisory_lock(_IMPORT_LOCK_KEY, user_id))):
-            return conn
-    except BaseException:
-        conn.close()
-        raise
-    conn.close()
-    return None
-
-
-def _release_lock(conn: Connection, user_id: int) -> None:
-    try:
-        conn.scalar(select(func.pg_advisory_unlock(_IMPORT_LOCK_KEY, user_id)))
-    finally:
-        conn.close()
 
 
 # --- Zapis jednej strony ------------------------------------------------------------------

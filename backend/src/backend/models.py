@@ -57,7 +57,33 @@ class Artist(Base):
     name_key: Mapped[str] = mapped_column(Text, unique=True)
     # Identyfikator MusicBrainz; Last.fm często go nie podaje
     mbid: Mapped[str | None] = mapped_column(String(36))
+    # Dane z artist.getInfo: ilu ludzi słucha artysty i ile ma odsłuchów na całym Last.fm
+    listeners: Mapped[int | None] = mapped_column(Integer)
+    global_playcount: Mapped[int | None] = mapped_column(BigInteger)
+    image_url: Mapped[str | None] = mapped_column(Text)
+    # Kiedy ostatnio pytaliśmy Last.fm o artystę (także wtedy, gdy go nie znalazł)
+    enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Tag(Base):
+    __tablename__ = "tag"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Nazwa małymi literami: Last.fm nie rozróżnia wielkości liter w tagach
+    name: Mapped[str] = mapped_column(Text, unique=True)
+
+
+class ArtistTag(Base):
+    """Tag artysty w surowej postaci z Last.fm; tagi-śmieci odsiewamy dopiero przy odczycie."""
+
+    __tablename__ = "artist_tag"
+    __table_args__ = (Index("ix_artist_tag_tag", "tag_id"),)
+
+    artist_id: Mapped[int] = mapped_column(ForeignKey("artist.id"), primary_key=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tag.id"), primary_key=True)
+    # Waga 1-100 z Last.fm: 100 ma najczęściej nadawany tag artysty
+    weight: Mapped[int] = mapped_column(Integer)
 
 
 class Track(Base):

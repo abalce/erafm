@@ -7,7 +7,7 @@ from procrastinate import testing
 from sqlalchemy import Engine, text
 
 from backend import worker
-from backend.worker import _conninfo, app, ping, resume_stalled_imports
+from backend.worker import _conninfo, app, ping, resume_stalled_imports, sync_user
 
 
 @pytest.fixture
@@ -19,6 +19,8 @@ def anyio_backend() -> str:
 def queue(clean_db: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[testing.InMemoryConnector]:
     """Kolejka w pamięci; zadania workera widzą bazę testową zamiast prawdziwej."""
     monkeypatch.setattr(worker, "engine", clean_db)
+    # Klient Last.fm utworzony w teście nie może przetrwać do następnego (inna pętla zdarzeń)
+    monkeypatch.setattr(worker, "_lastfm", None)
     connector = testing.InMemoryConnector()
     with app.replace_connector(connector):
         yield connector
@@ -63,3 +65,23 @@ async def test_stalled_imports_are_deferred_again(
 
     deferred = jobs_of(queue, "backend.worker.sync_user")
     assert [job["args"] for job in deferred] == [{"username": "przerwana"}]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("finished", "expected"), [(True, [{"timestamp": 0}]), (False, [])])
+async def test_finished_import_triggers_artist_enrichment(
+    queue: testing.InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+    finished: bool,
+    expected: list[dict],
+) -> None:
+    async def fake_run_import(*args: object) -> bool:
+        return finished
+
+    monkeypatch.setattr(worker, "run_import", fake_run_import)
+    monkeypatch.setattr(worker, "_lastfm_client", lambda: None)
+
+    await sync_user("przykladowa")
+    await sync_user("przykladowa")  # drugie zlecenie wzbogacania nie trafia do kolejki
+
+    assert [job["args"] for job in jobs_of(queue, "backend.worker.enrich_artists")] == expected

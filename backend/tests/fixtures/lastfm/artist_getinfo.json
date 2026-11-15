@@ -1,0 +1,11 @@
+{
+  "artist": {
+    "name": "Radiohead",
+    "mbid": "a74b1b7f-71a5-4011-9441-d0b5e4122711",
+    "url": "https://www.last.fm/music/Radiohead",
+    "streamable": "0",
+    "ontour": "0",
+    "stats": {"listeners": "8517127", "playcount": "1435987354"},
+    "tags": {"tag": [{"name": "rock", "url": "https://www.last.fm/tag/rock"}]}
+  }
+}

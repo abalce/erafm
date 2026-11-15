@@ -12,6 +12,7 @@ import procrastinate
 
 from .config import settings
 from .db import engine
+from .enrichment import run_enrichment
 from .importer import run_import, stalled_imports
 from .lastfm import LastfmClient
 
@@ -50,7 +51,25 @@ def _lastfm_client() -> LastfmClient:
 async def sync_user(username: str) -> None:
     """Importuje historię osoby: całą za pierwszym razem, potem tylko nowe odsłuchy.
     Wznawia też przerwany import."""
-    await run_import(_lastfm_client(), engine, username)
+    if await run_import(_lastfm_client(), engine, username):
+        # Nowe odsłuchy mogły przynieść nowych artystów: uzupełniamy ich dane w tle
+        await _defer_enrichment()
+
+
+async def _defer_enrichment() -> None:
+    try:
+        await enrich_artists.defer_async(timestamp=0)
+    except procrastinate.exceptions.AlreadyEnqueued:
+        logger.debug("Wzbogacanie artystów już czeka w kolejce")
+
+
+# Co kwadrans: dokańcza wzbogacanie przerwane restartem workera i odświeża artystów
+# sprawdzonych ponad 30 dni temu. Gdy nie ma nic do zrobienia, kończy się na jednym zapytaniu.
+@app.periodic(cron="*/15 * * * *")
+@app.task(queueing_lock="enrich_artists")
+async def enrich_artists(timestamp: int) -> None:
+    """Uzupełnia dane artystów z Last.fm (słuchacze, odsłuchy, tagi)."""
+    await run_enrichment(_lastfm_client(), engine)
 
 
 def _import_of(username: str) -> procrastinate.jobs.JobDeferrer:

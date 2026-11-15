@@ -49,6 +49,9 @@ def clean_db(db: Engine) -> Engine:
     """Baza testowa z pustymi tabelami aplikacji."""
     with db.begin() as conn:
         conn.execute(
-            text("TRUNCATE lfm_user, artist, track, scrobble, sync_job RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE lfm_user, artist, track, scrobble, sync_job, tag, artist_tag "
+                "RESTART IDENTITY CASCADE"
+            )
         )
     return db

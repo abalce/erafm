@@ -1,0 +1,10 @@
+{
+  "toptags": {
+    "tag": [
+      {"count": 100, "name": "rock", "url": "https://www.last.fm/tag/rock"},
+      {"count": 54, "name": "alternative", "url": "https://www.last.fm/tag/alternative"},
+      {"count": 34, "name": "alternative rock", "url": "https://www.last.fm/tag/alternative+rock"}
+    ],
+    "@attr": {"artist": "Radiohead"}
+  }
+}
