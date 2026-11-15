@@ -25,7 +25,9 @@ def client(clean_db: Engine, queue: testing.InMemoryConnector) -> Iterator[TestC
     app.dependency_overrides.clear()
 
 
-def add_import(db: Engine, status: str, *, pages: tuple[int, int] | None = None) -> None:
+def add_import(
+    db: Engine, status: str, *, pages: tuple[int, int] | None = None, minutes_ago: int = 0
+) -> None:
     """Zakłada osobę `przykladowa` z jednym importem w podanym stanie."""
     done, total = pages or (0, None)
     with db.begin() as conn:
@@ -39,9 +41,11 @@ def add_import(db: Engine, status: str, *, pages: tuple[int, int] | None = None)
             text(
                 "INSERT INTO sync_job "
                 "(user_id, kind, status, to_ts, pages_done, total_pages, error) "
-                "VALUES (1, 'full', :status, now(), :done, :total, :error)"
+                "VALUES (1, 'full', :status, now() - make_interval(mins => :ago), "
+                ":done, :total, :error)"
             ),
             {
+                "ago": minutes_ago,
                 "status": status,
                 "done": done,
                 "total": total,
@@ -105,15 +109,30 @@ def test_sync_retries_failed_import(
     assert queued_imports(queue) == [{"username": "przykladowa"}]
 
 
-def test_sync_leaves_finished_import_alone(
+def test_sync_leaves_freshly_synced_history_alone(
     client: TestClient, queue: testing.InMemoryConnector, clean_db: Engine
 ) -> None:
-    add_import(clean_db, "done", pages=(275, 275))
+    add_import(clean_db, "done", pages=(275, 275), minutes_ago=2)
     response = client.post("/users/przykladowa/sync")
 
     assert response.status_code == 202
     assert (response.json()["status"], response.json()["progress"]) == ("done", 100)
     assert queued_imports(queue) == []
+
+
+def test_sync_refreshes_older_history(
+    client: TestClient, queue: testing.InMemoryConnector, clean_db: Engine
+) -> None:
+    add_import(clean_db, "done", pages=(275, 275), minutes_ago=6)
+    response = client.post("/users/przykladowa/sync")
+
+    assert (response.json()["status"], response.json()["progress"]) == ("pending", 0)
+    assert queued_imports(queue) == [{"username": "przykladowa"}]
+    with clean_db.connect() as conn:
+        assert conn.scalars(text("SELECT kind FROM sync_job ORDER BY id")).all() == [
+            "full",
+            "incremental",
+        ]
 
 
 @pytest.mark.parametrize("nick", ["dwa%20slowa", "x" * 65])

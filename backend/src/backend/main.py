@@ -63,7 +63,8 @@ def health():
 @app.post("/users/{nick}/sync", status_code=202)
 def sync_user(nick: str, db: Db) -> ImportStatus:
     """Zleca import historii osoby i zwraca jego stan. Można wołać wielokrotnie:
-    trwający import się nie dubluje, przerwany rusza dalej, a zakończony zostaje."""
+    trwający import się nie dubluje, przerwany rusza dalej, a zakończony jest odświeżany
+    o nowe odsłuchy, najwyżej raz na 5 minut."""
     username = normalize_username(nick)
     if not is_valid_username(username):
         raise HTTPException(status_code=422, detail="invalid_username")

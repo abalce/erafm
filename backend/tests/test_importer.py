@@ -1,8 +1,8 @@
-"""Testy importu pełnej historii: prawdziwa baza testowa, udawany Last.fm."""
+"""Testy importu historii: prawdziwa baza testowa, udawany Last.fm."""
 
 import math
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -12,7 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from tenacity import wait_none
 
-from backend.importer import _acquire_lock, _release_lock, run_full_import
+from backend import importer
+from backend.importer import _acquire_lock, _release_lock
 from backend.lastfm import LastfmClient
 from backend.models import Artist, LfmUser, Scrobble, SyncJob, Track
 
@@ -39,6 +40,7 @@ class FakeLastfm:
         self.fail_on_page: int | None = None  # błąd tylko przy tej stronie historii
         self.pages_requested: list[int] = []
         self.to_values: set[str] = set()
+        self.from_values: set[str | None] = set()
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         params = request.url.params
@@ -49,9 +51,11 @@ class FakeLastfm:
         page, limit = int(params["page"]), int(params["limit"])
         self.pages_requested.append(page)
         self.to_values.add(params["to"])
+        self.from_values.add(params.get("from"))
         if page == self.fail_on_page:
             return self._error(10, "Invalid API key")
-        return httpx.Response(200, json=self._recent_tracks(page, limit, int(params["to"])))
+        window = (int(params.get("from", 0)), int(params["to"]))
+        return httpx.Response(200, json=self._recent_tracks(page, limit, window))
 
     @staticmethod
     def _error(code: int, message: str) -> httpx.Response:
@@ -66,9 +70,13 @@ class FakeLastfm:
             }
         }
 
-    def _recent_tracks(self, page: int, limit: int, to: int) -> dict:
+    def _recent_tracks(self, page: int, limit: int, window: tuple[int, int]) -> dict:
         # Jak w Last.fm: od najnowszych, strona 1 to najnowsze odsłuchy
-        plays = sorted((p for p in self.plays if p[2] <= to), key=lambda p: p[2], reverse=True)
+        plays = sorted(
+            (p for p in self.plays if window[0] <= p[2] <= window[1]),
+            key=lambda p: p[2],
+            reverse=True,
+        )
         chunk = plays[(page - 1) * limit : page * limit]
         return {
             "recenttracks": {
@@ -103,12 +111,25 @@ async def run_import(
     mock.get(host="ws.audioscrobbler.com", path="/2.0/").mock(side_effect=fake)
     # Bez czekania między próbami i bez limitu, żeby testy były szybkie
     async with LastfmClient("test-key", max_rate=1000, retry_wait=wait_none()) as client:
-        await run_full_import(client, db, username, page_size=2)
+        await importer.run_import(client, db, username, page_size=2)
 
 
 def the_job(db: Engine) -> SyncJob:
     with Session(db) as session:
         return session.scalars(select(SyncJob)).one()
+
+
+def all_jobs(db: Engine) -> list[SyncJob]:
+    with Session(db) as session:
+        return list(session.scalars(select(SyncJob).order_by(SyncJob.id)))
+
+
+def age_last_sync(db: Engine, minutes: int) -> None:
+    """Udaje, że ostatni import skończył się `minutes` minut temu."""
+    with db.begin() as conn:
+        conn.execute(
+            text("UPDATE sync_job SET to_ts = to_ts - make_interval(mins => :m)"), {"m": minutes}
+        )
 
 
 def scrobble_count(db: Engine) -> int:
@@ -244,6 +265,79 @@ async def test_import_skipped_when_another_one_holds_the_lock(
 
     await run_import(lastfm_mock, fake, clean_db)
     assert scrobble_count(clean_db) == 5
+
+
+LAST_PLAY = FIVE_PLAYS[-1][2]
+NEW_PLAYS = [
+    ("Björk", "Hyperballad", LAST_PLAY - 3600),  # dosłany z opóźnieniem, ze starszą datą
+    ("Radiohead", "Creep", LAST_PLAY + 500),
+    ("Portishead", "Roads", LAST_PLAY + 800),
+]
+
+
+async def test_fresh_history_is_not_refreshed_again(
+    lastfm_mock: respx.MockRouter, clean_db: Engine
+) -> None:
+    fake = FakeLastfm(FIVE_PLAYS)
+    await run_import(lastfm_mock, fake, clean_db)
+    fake.plays = [*FIVE_PLAYS, *NEW_PLAYS]
+    fake.pages_requested.clear()
+
+    await run_import(lastfm_mock, fake, clean_db)  # mniej niż 5 minut po poprzednim
+
+    assert fake.pages_requested == []
+    assert len(all_jobs(clean_db)) == 1
+    assert scrobble_count(clean_db) == 5
+
+
+async def test_incremental_import_fetches_only_recent_window(
+    lastfm_mock: respx.MockRouter, clean_db: Engine
+) -> None:
+    fake = FakeLastfm(FIVE_PLAYS)
+    await run_import(lastfm_mock, fake, clean_db)
+    age_last_sync(clean_db, minutes=10)
+    fake.plays = [*FIVE_PLAYS, *NEW_PLAYS]
+    fake.pages_requested.clear()
+    fake.from_values.clear()
+
+    await run_import(lastfm_mock, fake, clean_db)
+
+    full, incremental = all_jobs(clean_db)
+    assert (full.kind, full.from_ts) == ("full", None)
+    assert (incremental.kind, incremental.status) == ("incremental", "done")
+    # Okno zaczyna się 14 dni przed ostatnim odsłuchem w bazie
+    window_start = datetime.fromtimestamp(LAST_PLAY, UTC) - timedelta(days=14)
+    assert incremental.from_ts == window_start
+    assert fake.from_values == {str(int(window_start.timestamp()))}
+    # Wszystkie 8 odsłuchów mieści się w oknie: 4 strony po 2 zamiast całej historii od zera
+    assert fake.pages_requested == [1, 4, 3, 2, 1]
+    assert scrobble_count(clean_db) == 8  # stare bez powtórek, nowe razem z dosłanym
+    with Session(clean_db) as session:
+        assert session.scalars(select(LfmUser.last_synced_at)).one() == incremental.to_ts
+
+
+async def test_interrupted_incremental_import_resumes_same_window(
+    lastfm_mock: respx.MockRouter, clean_db: Engine
+) -> None:
+    fake = FakeLastfm(FIVE_PLAYS)
+    await run_import(lastfm_mock, fake, clean_db)
+    age_last_sync(clean_db, minutes=10)
+    fake.plays = [*FIVE_PLAYS, *NEW_PLAYS]
+    fake.fail_on_page = 2
+    await run_import(lastfm_mock, fake, clean_db)
+
+    failed = all_jobs(clean_db)[-1]
+    assert (failed.kind, failed.status, failed.pages_done) == ("incremental", "failed", 2)
+
+    fake.fail_on_page = None
+    fake.pages_requested.clear()
+    await run_import(lastfm_mock, fake, clean_db)
+
+    resumed = all_jobs(clean_db)[-1]
+    assert (resumed.id, resumed.status) == (failed.id, "done")
+    assert (resumed.from_ts, resumed.to_ts) == (failed.from_ts, failed.to_ts)
+    assert fake.pages_requested == [2, 1]
+    assert scrobble_count(clean_db) == 8
 
 
 def test_only_one_active_job_per_user(clean_db: Engine) -> None:

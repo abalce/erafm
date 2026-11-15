@@ -61,5 +61,5 @@ async def test_stalled_imports_are_deferred_again(
     await resume_stalled_imports(0)
     await resume_stalled_imports(0)  # drugie zlecenie tej samej osoby nie trafia do kolejki
 
-    deferred = jobs_of(queue, "backend.worker.import_full")
+    deferred = jobs_of(queue, "backend.worker.sync_user")
     assert [job["args"] for job in deferred] == [{"username": "przerwana"}]

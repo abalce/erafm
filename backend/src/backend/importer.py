@@ -1,4 +1,7 @@
-"""Import pełnej historii odsłuchów jednej osoby z Last.fm do bazy.
+"""Import historii odsłuchów jednej osoby z Last.fm do bazy.
+
+Pierwszy import osoby jest pełny (cała historia), kolejne przyrostowe (tylko to, co
+przybyło od ostatniego odsłuchu w bazie). Oba różnią się wyłącznie początkiem okna.
 
 Strony pobieramy od najstarszej do najnowszej. Każda strona to jedna transakcja:
 artyści, utwory, scrobble i licznik zapisanych stron trafiają do bazy razem, więc
@@ -39,6 +42,15 @@ DUPLICATE_WINDOW = timedelta(seconds=30)
 # Najdłuższa uczciwa przerwa to 5 prób jednego zapytania, czyli ok. 90 s.
 STALLED_AFTER = timedelta(minutes=3)
 
+# Nie odświeżamy historii częściej: frontend prosi o to przy każdym otwarciu profilu
+REFRESH_INTERVAL = timedelta(minutes=5)
+
+# Import przyrostowy cofa się o tyle przed ostatni odsłuch w bazie, bo odsłuchy bywają
+# dosyłane z opóźnieniem, ze starszą datą. Według relacji użytkowników Last.fm odrzuca
+# scrobble starsze niż 2 tygodnie (oficjalna dokumentacja nie podaje liczby).
+# Odsłuchy, które już mamy, odrzuci klucz główny tabeli scrobble.
+LATE_SCROBBLE_WINDOW = timedelta(days=14)
+
 # Oficjalnych zasad nicków Last.fm nie znamy, więc odrzucamy tylko to, co na pewno
 # nie jest nickiem: pusty tekst, spacje, ukośniki i wszystko dłuższe niż kolumna w bazie
 _USERNAME_RE = re.compile(r"[^\s/]{1,64}")
@@ -62,6 +74,7 @@ def _name_key(name: str) -> str:
 
 @dataclass(frozen=True)
 class _JobState:
+    from_ts: datetime | None
     to_ts: datetime
     total_pages: int | None
     pages_done: int
@@ -70,10 +83,11 @@ class _JobState:
 # --- Przebieg importu (asynchroniczny: rozmowa z Last.fm) --------------------------------
 
 
-async def run_full_import(
+async def run_import(
     client: LastfmClient, db: Engine, username: str, *, page_size: int = MAX_PAGE_SIZE
 ) -> None:
-    """Importuje całą historię osoby albo wznawia jej niedokończony import.
+    """Importuje historię osoby: całą, gdy jej nie mamy, albo tylko nowe odsłuchy.
+    Wznawia też niedokończony import.
 
     Zapisy do bazy są synchroniczne i krótkie, więc idą do osobnego wątku (`to_thread`),
     żeby nie blokować pętli zdarzeń workera.
@@ -81,7 +95,7 @@ async def run_full_import(
     username = normalize_username(username)
     job = await asyncio.to_thread(open_import, db, username)
     if job is None:
-        logger.info("Historia %s jest już zaimportowana, pomijam", username)
+        logger.info("Historia %s jest świeża, pomijam", username)
         return
     job_id, user_id = job
 
@@ -110,7 +124,9 @@ async def _import_pages(
     total_pages = state.total_pages
     if total_pages is None:
         # Liczbę stron znamy dopiero z odpowiedzi; `to` jest zamrożone, więc się nie zmieni
-        first = await client.get_recent_tracks(username, page=1, limit=page_size, to_ts=state.to_ts)
+        first = await client.get_recent_tracks(
+            username, page=1, limit=page_size, from_ts=state.from_ts, to_ts=state.to_ts
+        )
         total_pages = first.total_pages
         await asyncio.to_thread(_set_total_pages, db, job_id, total_pages)
 
@@ -120,7 +136,7 @@ async def _import_pages(
     # Strona 1 to najnowsze odsłuchy, więc od najstarszych idziemy malejąco po numerach
     for page_no in range(total_pages - state.pages_done, 0, -1):
         page = await client.get_recent_tracks(
-            username, page=page_no, limit=page_size, to_ts=state.to_ts
+            username, page=page_no, limit=page_size, from_ts=state.from_ts, to_ts=state.to_ts
         )
         await asyncio.to_thread(_store_page, db, job_id, page.scrobbles)
 
@@ -143,7 +159,7 @@ def _error_code(exc: Exception) -> str:
 
 def open_import(db: Engine, username: str) -> tuple[int, int] | None:
     """Zwraca (id zadania, id osoby) importu do wykonania: trwającego, przerwanego albo
-    nowego. None, gdy historia osoby jest już zaimportowana i nie ma nic do zrobienia.
+    nowego. None, gdy historia osoby została odświeżona przed chwilą.
 
     `username` musi być znormalizowany (`normalize_username`).
     """
@@ -166,23 +182,27 @@ def _find_or_create_job(db: Engine, username: str) -> tuple[int, int] | None:
         )
         user_id = session.scalars(select(LfmUser.id).where(LfmUser.username == username)).one()
         job = session.scalars(
-            select(SyncJob)
-            .where(SyncJob.user_id == user_id, SyncJob.kind == "full")
-            .order_by(SyncJob.id.desc())
-            .limit(1)
+            select(SyncJob).where(SyncJob.user_id == user_id).order_by(SyncJob.id.desc()).limit(1)
         ).first()
-        if job is not None and job.status == "done":
-            return None
+        # Last.fm liczy czas w pełnych sekundach
+        now = datetime.now(UTC).replace(microsecond=0)
         if job is None:
-            # Last.fm liczy czas w pełnych sekundach
-            job = SyncJob(
-                user_id=user_id, kind="full", to_ts=datetime.now(UTC).replace(microsecond=0)
-            )
+            job = SyncJob(user_id=user_id, kind="full", to_ts=now)
             session.add(job)
         elif job.status == "failed":
-            # Wznawiamy od zapisanej strony, z tym samym zamrożonym `to_ts`
+            # Wznawiamy od zapisanej strony, z tym samym zamrożonym oknem czasu
             job.status = "pending"
             job.error = None
+        elif job.status == "done":
+            if now - job.to_ts < REFRESH_INTERVAL:
+                return None
+            last_played = session.scalar(
+                select(func.max(Scrobble.played_at)).where(Scrobble.user_id == user_id)
+            )
+            # Pusta historia nie ma od czego liczyć okna: pytamy wtedy o wszystko
+            from_ts = last_played - LATE_SCROBBLE_WINDOW if last_played else None
+            job = SyncJob(user_id=user_id, kind="incremental", from_ts=from_ts, to_ts=now)
+            session.add(job)
         session.commit()
         return job.id, user_id
 
@@ -196,7 +216,7 @@ def _start_job(db: Engine, job_id: int, info: UserInfo) -> _JobState:
         user.registered_at = info.registered_at
         user.playcount = info.playcount
         session.commit()
-        return _JobState(job.to_ts, job.total_pages, job.pages_done)
+        return _JobState(job.from_ts, job.to_ts, job.total_pages, job.pages_done)
 
 
 def _set_total_pages(db: Engine, job_id: int, total_pages: int) -> None:
