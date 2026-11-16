@@ -11,6 +11,8 @@
 	} from '#lib/api.ts';
 	import { formatDate, formatNumber } from '#lib/format.ts';
 	import { canRetry, errorMessage } from '#lib/messages.ts';
+	import MonthlyChart from '#lib/MonthlyChart.svelte';
+	import TopList from '#lib/TopList.svelte';
 
 	// Co ile pytamy API o postęp importu
 	const POLL_MS = 2000;
@@ -143,6 +145,38 @@
 			<p class="muted">To konto nie ma jeszcze żadnych odsłuchów na Last.fm.</p>
 		{/if}
 	</section>
+
+	{#if totals.scrobbles > 0}
+		<section>
+			<h2>Odsłuchy miesiąc po miesiącu</h2>
+			<MonthlyChart data={view.stats.monthly} />
+		</section>
+
+		<div class="columns">
+			<section>
+				<h2>Najczęściej słuchani artyści</h2>
+				<TopList
+					items={view.stats.top_artists.map((artist) => ({
+						id: artist.id,
+						name: artist.name,
+						plays: artist.plays,
+						imageUrl: artist.image_url
+					}))}
+				/>
+			</section>
+			<section>
+				<h2>Najczęściej słuchane utwory</h2>
+				<TopList
+					items={view.stats.top_tracks.map((track) => ({
+						id: track.id,
+						name: track.name,
+						detail: track.artist_name,
+						plays: track.plays
+					}))}
+				/>
+			</section>
+		</div>
+	{/if}
 {:else}
 	<section class="problem">
 		<h1>{nick}</h1>
@@ -164,6 +198,17 @@
 	h1 {
 		font-size: clamp(2rem, 6vw, 3rem);
 		overflow-wrap: anywhere;
+	}
+
+	h2 {
+		margin-bottom: var(--space-4);
+		font-size: 1.375rem;
+	}
+
+	.columns {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+		gap: 0 var(--space-6);
 	}
 
 	.lead {
