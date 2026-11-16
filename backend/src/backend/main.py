@@ -18,6 +18,7 @@ from .importer import (
     normalize_username,
     open_import,
 )
+from .stats import MAX_LIMIT, ImportInProgress, NotImported, UserStats, user_stats
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +82,16 @@ def user_status(nick: str, db: Db) -> ImportStatus:
     if status is None:
         raise HTTPException(status_code=404, detail="not_imported")
     return status
+
+
+@app.get("/users/{nick}/stats")
+def stats(nick: str, db: Db, limit: int = 10) -> UserStats:
+    """Liczby ogólne, top artyści i utwory (`limit` pozycji) oraz odsłuchy miesięcznie."""
+    if not 1 <= limit <= MAX_LIMIT:
+        raise HTTPException(status_code=422, detail="invalid_limit")
+    try:
+        return user_stats(db, normalize_username(nick), limit)
+    except NotImported:
+        raise HTTPException(status_code=404, detail="not_imported") from None
+    except ImportInProgress:
+        raise HTTPException(status_code=409, detail="import_in_progress") from None
