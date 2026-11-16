@@ -1,10 +1,11 @@
 """Modele bazy danych: użytkownicy, artyści, utwory, scrobble i zadania importu."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -111,6 +112,32 @@ class Scrobble(Base):
     track_id: Mapped[int] = mapped_column(ForeignKey("track.id"), primary_key=True)
     # Kopia artysty z utworu: agregaty po artyście bez łączenia z tabelą track
     artist_id: Mapped[int] = mapped_column(ForeignKey("artist.id"))
+
+
+class WeeklyArtistStats(Base):
+    """Odsłuchy artysty u jednej osoby w jednym tygodniu. Tabela wyliczana ze scrobbli
+    po każdym imporcie osoby (backend/aggregates.py), nigdy nie edytowana ręcznie."""
+
+    __tablename__ = "weekly_artist_stats"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("lfm_user.id"), primary_key=True)
+    # Poniedziałek rozpoczynający tydzień, w strefie czasowej aplikacji
+    week: Mapped[date] = mapped_column(Date, primary_key=True)
+    artist_id: Mapped[int] = mapped_column(ForeignKey("artist.id"), primary_key=True)
+    plays: Mapped[int] = mapped_column(Integer)
+
+
+class FirstListen(Base):
+    """Historia jednej osoby z jednym artystą w pigułce: pierwszy i ostatni odsłuch
+    oraz ich łączna liczba. Wyliczana ze scrobbli razem z weekly_artist_stats."""
+
+    __tablename__ = "first_listen"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("lfm_user.id"), primary_key=True)
+    artist_id: Mapped[int] = mapped_column(ForeignKey("artist.id"), primary_key=True)
+    first_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    total_plays: Mapped[int] = mapped_column(Integer)
 
 
 class SyncJob(Base):

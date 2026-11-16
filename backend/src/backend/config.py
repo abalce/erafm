@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     database_url: str
     lastfm_api_key: str
     cors_origins: list[str] = ["http://localhost:5173"]
+    # Strefa, w której liczymy tygodnie i dni: timestampy w bazie są w UTC, a słuchanie
+    # po północy czasu polskiego ma trafiać do właściwego dnia
+    app_timezone: str = "Europe/Warsaw"
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 

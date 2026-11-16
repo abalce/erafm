@@ -50,7 +50,8 @@ def clean_db(db: Engine) -> Engine:
     with db.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE lfm_user, artist, track, scrobble, sync_job, tag, artist_tag "
+                "TRUNCATE lfm_user, artist, track, scrobble, sync_job, tag, artist_tag, "
+                "weekly_artist_stats, first_listen "
                 "RESTART IDENTITY CASCADE"
             )
         )

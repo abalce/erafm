@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .aggregates import recompute_user_stats
 from .lastfm import (
     MAX_PAGE_SIZE,
     HistoryHidden,
@@ -229,6 +230,8 @@ def _set_total_pages(db: Engine, job_id: int, total_pages: int) -> None:
 def _finish_job(db: Engine, job_id: int) -> None:
     with Session(db) as session:
         job = session.get_one(SyncJob, job_id)
+        # W tej samej transakcji co „done”: kto widzi zakończony import, ma już świeże agregaty
+        recompute_user_stats(session, job.user_id)
         job.status = "done"
         # Historia jest kompletna do chwili, w której zamroziliśmy okno importu
         session.get_one(LfmUser, job.user_id).last_synced_at = job.to_ts

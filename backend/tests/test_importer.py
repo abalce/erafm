@@ -124,6 +124,15 @@ def all_jobs(db: Engine) -> list[SyncJob]:
         return list(session.scalars(select(SyncJob).order_by(SyncJob.id)))
 
 
+def aggregate_totals(db: Engine) -> tuple[int, int]:
+    """Suma odsłuchów zapisana w weekly_artist_stats i w first_listen."""
+    with db.connect() as conn:
+        return (
+            conn.scalar(text("SELECT coalesce(sum(plays), 0) FROM weekly_artist_stats")),
+            conn.scalar(text("SELECT coalesce(sum(total_plays), 0) FROM first_listen")),
+        )
+
+
 def age_last_sync(db: Engine, minutes: int) -> None:
     """Udaje, że ostatni import skończył się `minutes` minut temu."""
     with db.begin() as conn:
@@ -175,6 +184,8 @@ async def test_full_import_stores_whole_history(
         )
         played = session.scalars(select(Scrobble.played_at).order_by(Scrobble.played_at)).all()
         assert played == [datetime.fromtimestamp(p[2], UTC) for p in FIVE_PLAYS]
+    # Zakończony import ma już przeliczone agregaty
+    assert aggregate_totals(clean_db) == (5, 5)
 
 
 async def test_duplicates_under_30s_are_skipped_also_across_pages(
@@ -206,6 +217,7 @@ async def test_interrupted_import_resumes_without_gaps_or_repeats(
     failed = the_job(clean_db)
     assert (failed.status, failed.error, failed.pages_done) == ("failed", "lastfm_error", 1)
     assert scrobble_count(clean_db) == 1  # tylko najstarsza strona
+    assert aggregate_totals(clean_db) == (0, 0)  # agregaty powstają dopiero z całej historii
 
     # Między próbami przybył nowy odsłuch: nie może przesunąć stron wznowionego importu
     fake.plays = [*FIVE_PLAYS, ("Radiohead", "Creep", int(datetime.now(UTC).timestamp()) + 60)]
@@ -312,6 +324,7 @@ async def test_incremental_import_fetches_only_recent_window(
     # Wszystkie 8 odsłuchów mieści się w oknie: 4 strony po 2 zamiast całej historii od zera
     assert fake.pages_requested == [1, 4, 3, 2, 1]
     assert scrobble_count(clean_db) == 8  # stare bez powtórek, nowe razem z dosłanym
+    assert aggregate_totals(clean_db) == (8, 8)
     with Session(clean_db) as session:
         assert session.scalars(select(LfmUser.last_synced_at)).one() == incremental.to_ts
 
