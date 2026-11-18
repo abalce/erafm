@@ -1,0 +1,21 @@
+# Do obrazu trafia tylko to, co kopiuje Dockerfile; reszta niepotrzebnie wydłuża budowanie.
+# Sekrety (.env) nie mogą trafić do obrazu.
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.claude
+docs
+CLAUDE.md
+**/.DS_Store
+
+backend/.venv
+backend/tests
+backend/scripts
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+
+web/node_modules
+web/.svelte-kit
+web/build

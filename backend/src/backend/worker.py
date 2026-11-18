@@ -77,10 +77,10 @@ def _import_of(username: str) -> procrastinate.jobs.JobDeferrer:
     return sync_user.configure(queueing_lock=f"import:{username}")
 
 
-def defer_import(username: str) -> None:
+async def defer_import(username: str) -> None:
     """Zleca import osoby (dla API). Nic nie robi, gdy takie zlecenie już czeka."""
     try:
-        _import_of(username).defer(username=username)
+        await _import_of(username).defer_async(username=username)
     except procrastinate.exceptions.AlreadyEnqueued:
         logger.debug("Import %s już czeka w kolejce", username)
 

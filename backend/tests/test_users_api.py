@@ -61,7 +61,7 @@ def queued_imports(queue: testing.InMemoryConnector) -> list[dict]:
 def test_sync_starts_import_for_new_user(
     client: TestClient, queue: testing.InMemoryConnector
 ) -> None:
-    response = client.post("/users/PrzykLadowa/sync")
+    response = client.post("/api/users/PrzykLadowa/sync")
 
     assert response.status_code == 202
     assert response.json() == {
@@ -78,8 +78,8 @@ def test_sync_starts_import_for_new_user(
 def test_repeated_sync_does_not_start_second_import(
     client: TestClient, queue: testing.InMemoryConnector, clean_db: Engine
 ) -> None:
-    client.post("/users/przykladowa/sync")
-    response = client.post("/users/przykladowa/sync")
+    client.post("/api/users/przykladowa/sync")
+    response = client.post("/api/users/przykladowa/sync")
 
     assert response.status_code == 202
     assert response.json()["status"] == "pending"
@@ -92,7 +92,7 @@ def test_sync_resumes_running_import(
     client: TestClient, queue: testing.InMemoryConnector, clean_db: Engine
 ) -> None:
     add_import(clean_db, "running", pages=(55, 275))
-    response = client.post("/users/przykladowa/sync")
+    response = client.post("/api/users/przykladowa/sync")
 
     assert (response.json()["status"], response.json()["progress"]) == ("running", 20)
     assert queued_imports(queue) == [{"username": "przykladowa"}]
@@ -102,7 +102,7 @@ def test_sync_retries_failed_import(
     client: TestClient, queue: testing.InMemoryConnector, clean_db: Engine
 ) -> None:
     add_import(clean_db, "failed", pages=(55, 275))
-    response = client.post("/users/przykladowa/sync")
+    response = client.post("/api/users/przykladowa/sync")
 
     body = response.json()
     assert (body["status"], body["progress"], body["error"]) == ("pending", 20, None)
@@ -113,7 +113,7 @@ def test_sync_leaves_freshly_synced_history_alone(
     client: TestClient, queue: testing.InMemoryConnector, clean_db: Engine
 ) -> None:
     add_import(clean_db, "done", pages=(275, 275), minutes_ago=2)
-    response = client.post("/users/przykladowa/sync")
+    response = client.post("/api/users/przykladowa/sync")
 
     assert response.status_code == 202
     assert (response.json()["status"], response.json()["progress"]) == ("done", 100)
@@ -124,7 +124,7 @@ def test_sync_refreshes_older_history(
     client: TestClient, queue: testing.InMemoryConnector, clean_db: Engine
 ) -> None:
     add_import(clean_db, "done", pages=(275, 275), minutes_ago=6)
-    response = client.post("/users/przykladowa/sync")
+    response = client.post("/api/users/przykladowa/sync")
 
     assert (response.json()["status"], response.json()["progress"]) == ("pending", 0)
     assert queued_imports(queue) == [{"username": "przykladowa"}]
@@ -139,7 +139,7 @@ def test_sync_refreshes_older_history(
 def test_sync_rejects_impossible_username(
     client: TestClient, queue: testing.InMemoryConnector, nick: str
 ) -> None:
-    response = client.post(f"/users/{nick}/sync")
+    response = client.post(f"/api/users/{nick}/sync")
 
     assert response.status_code == 422
     assert response.json() == {"detail": "invalid_username"}
@@ -148,7 +148,7 @@ def test_sync_rejects_impossible_username(
 
 def test_status_shows_progress_and_error(client: TestClient, clean_db: Engine) -> None:
     add_import(clean_db, "failed", pages=(274, 275))
-    response = client.get("/users/Przykladowa/status")
+    response = client.get("/api/users/Przykladowa/status")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -162,7 +162,7 @@ def test_status_shows_progress_and_error(client: TestClient, clean_db: Engine) -
 
 
 def test_status_of_unknown_user(client: TestClient) -> None:
-    response = client.get("/users/nieznana/status")
+    response = client.get("/api/users/nieznana/status")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "not_imported"}

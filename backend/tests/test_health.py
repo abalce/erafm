@@ -7,7 +7,7 @@ from backend.main import app
 
 def test_health():
     client = TestClient(app)
-    response = client.get("/health")
+    response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "db": "ok"}
 
@@ -19,6 +19,6 @@ def test_health_db_down(monkeypatch):
     monkeypatch.setattr(engine, "connect", broken_connect)
 
     client = TestClient(app)
-    response = client.get("/health")
+    response = client.get("/api/health")
     assert response.status_code == 503
     assert response.json() == {"detail": "db_unavailable"}

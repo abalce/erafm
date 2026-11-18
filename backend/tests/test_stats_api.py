@@ -79,7 +79,7 @@ def test_stats_for_imported_user(client: TestClient, clean_db: Engine) -> None:
     add_user(clean_db, synced=True, job_status="done")
     add_history(clean_db)
 
-    response = client.get("/users/Przykladowa/stats")
+    response = client.get("/api/users/Przykladowa/stats")
 
     assert response.status_code == 200
     body = response.json()
@@ -107,7 +107,7 @@ def test_monthly_series_is_continuous_and_in_app_timezone(
     add_user(clean_db, synced=True, job_status="done")
     add_history(clean_db)
 
-    monthly = client.get("/users/przykladowa/stats").json()["monthly"]
+    monthly = client.get("/api/users/przykladowa/stats").json()["monthly"]
 
     # Styczeń, luty (odsłuch z 31 stycznia 23:30 UTC), marzec bez słuchania, kwiecień
     assert monthly[:4] == [
@@ -127,7 +127,7 @@ def test_limit_shortens_top_lists(client: TestClient, clean_db: Engine) -> None:
     add_user(clean_db, synced=True, job_status="done")
     add_history(clean_db)
 
-    body = client.get("/users/przykladowa/stats", params={"limit": 1}).json()
+    body = client.get("/api/users/przykladowa/stats", params={"limit": 1}).json()
 
     assert [a["name"] for a in body["top_artists"]] == ["Radiohead"]
     assert [t["name"] for t in body["top_tracks"]] == ["Creep"]
@@ -135,7 +135,7 @@ def test_limit_shortens_top_lists(client: TestClient, clean_db: Engine) -> None:
 
 @pytest.mark.parametrize("limit", [0, 51])
 def test_limit_out_of_range(client: TestClient, limit: int) -> None:
-    response = client.get("/users/przykladowa/stats", params={"limit": limit})
+    response = client.get("/api/users/przykladowa/stats", params={"limit": limit})
 
     assert response.status_code == 422
     assert response.json() == {"detail": "invalid_limit"}
@@ -145,7 +145,7 @@ def test_stats_during_refresh_are_served(client: TestClient, clean_db: Engine) -
     add_user(clean_db, synced=True, job_status="running")
     add_history(clean_db)
 
-    assert client.get("/users/przykladowa/stats").status_code == 200
+    assert client.get("/api/users/przykladowa/stats").status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -157,14 +157,14 @@ def test_stats_without_finished_import(
 ) -> None:
     add_user(clean_db, synced=False, job_status=job_status)
 
-    response = client.get("/users/przykladowa/stats")
+    response = client.get("/api/users/przykladowa/stats")
 
     assert response.status_code == status_code
     assert response.json() == {"detail": detail}
 
 
 def test_stats_of_unknown_user(client: TestClient, clean_db: Engine) -> None:
-    response = client.get("/users/nieznana/stats")
+    response = client.get("/api/users/nieznana/stats")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "not_imported"}

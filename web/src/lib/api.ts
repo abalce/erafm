@@ -68,7 +68,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	let response: Response;
 	try {
-		response = await fetch(`${PUBLIC_API_URL}${path}`, init);
+		response = await fetch(`${PUBLIC_API_URL}/api${path}`, init);
 	} catch {
 		// fetch rzuca tylko wtedy, gdy nie udało się w ogóle połączyć
 		throw new ApiError('api_unavailable', 0);

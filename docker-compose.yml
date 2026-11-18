@@ -16,8 +16,8 @@ services:
       retries: 10
 
   api:
-    build: ./backend
-    image: erafm-backend
+    build: .
+    image: erafm
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://statsmusic:statsmusic@db:5432/statsmusic
@@ -32,14 +32,14 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request; urllib.request.urlopen("http://localhost:8000/health", timeout=3)
+        - import urllib.request; urllib.request.urlopen("http://localhost:8000/api/health", timeout=3)
       interval: 5s
       timeout: 5s
       retries: 10
 
   worker:
     # Ten sam obraz co API, inna komenda
-    image: erafm-backend
+    image: erafm
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://statsmusic:statsmusic@db:5432/statsmusic
