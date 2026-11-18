@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .aggregates import recompute_user_stats
+from .config import settings
 from .lastfm import (
     MAX_PAGE_SIZE,
     HistoryHidden,
@@ -31,7 +32,7 @@ from .lastfm import (
     UserNotFound,
 )
 from .lastfm import Scrobble as LastfmScrobble
-from .locks import IMPORT_LOCK, release_lock, try_lock
+from .locks import IMPORT_ADMISSION_LOCK, IMPORT_LOCK, release_lock, try_lock
 from .models import Artist, LfmUser, Scrobble, SyncJob, Track
 
 logger = logging.getLogger(__name__)
@@ -159,9 +160,24 @@ def _error_code(exc: Exception) -> str:
 # --- Zadanie importu w bazie (synchroniczne) ---------------------------------------------
 
 
+class ImportRefused(Exception):
+    """Pierwszego importu osoby nie zaczynamy, bo przekroczyłby limit."""
+
+
+class ImportQueueFull(ImportRefused):
+    """Trwa już tyle pierwszych importów, ile pozwala limit; za kilka minut się zwolni."""
+
+
+class UserLimitReached(ImportRefused):
+    """Baza ma już komplet osób."""
+
+
 def open_import(db: Engine, username: str) -> tuple[int, int] | None:
     """Zwraca (id zadania, id osoby) importu do wykonania: trwającego, przerwanego albo
     nowego. None, gdy historia osoby została odświeżona przed chwilą.
+
+    Pierwszy import osoby (także wznowienie nieudanego) podlega limitom z ustawień;
+    przy ich przekroczeniu rzuca ImportQueueFull albo UserLimitReached i niczego nie zapisuje.
 
     `username` musi być znormalizowany (`normalize_username`).
     """
@@ -182,12 +198,17 @@ def _find_or_create_job(db: Engine, username: str) -> tuple[int, int] | None:
             .values(username=username, display_name=username)
             .on_conflict_do_nothing(index_elements=["username"])
         )
-        user_id = session.scalars(select(LfmUser.id).where(LfmUser.username == username)).one()
+        user = session.scalars(select(LfmUser).where(LfmUser.username == username)).one()
+        user_id = user.id
         job = session.scalars(
             select(SyncJob).where(SyncJob.user_id == user_id).order_by(SyncJob.id.desc()).limit(1)
         ).first()
         # Last.fm liczy czas w pełnych sekundach
         now = datetime.now(UTC).replace(microsecond=0)
+        if user.last_synced_at is None and (job is None or job.status == "failed"):
+            # Zaczyna się (albo wraca po błędzie) pierwszy import osoby. Odmowa cofa
+            # transakcję, więc odrzucony nick nie zostawia śladu w bazie.
+            _check_first_import_limits(session, user_id)
         if job is None:
             job = SyncJob(user_id=user_id, kind="full", to_ts=now)
             session.add(job)
@@ -207,6 +228,35 @@ def _find_or_create_job(db: Engine, username: str) -> tuple[int, int] | None:
             session.add(job)
         session.commit()
         return job.id, user_id
+
+
+def _check_first_import_limits(session: Session, user_id: int) -> None:
+    # Blokada do końca transakcji: równoległe zlecenie poczeka i policzy już nasz import
+    session.execute(select(func.pg_advisory_xact_lock(IMPORT_ADMISSION_LOCK, 0)))
+    active = SyncJob.status.in_(("pending", "running"))
+
+    # Liczą się osoby z historią albo z trwającym importem; literówki w nicku i ukryte
+    # historie (nieudany pierwszy import) nie zajmują miejsca
+    users = session.scalar(
+        select(func.count())
+        .select_from(LfmUser)
+        .where(
+            LfmUser.id != user_id,
+            LfmUser.last_synced_at.is_not(None)
+            | select(SyncJob.id).where(SyncJob.user_id == LfmUser.id, active).exists(),
+        )
+    )
+    if users >= settings.max_users:
+        raise UserLimitReached
+
+    first_imports = session.scalar(
+        select(func.count())
+        .select_from(SyncJob)
+        .join(LfmUser, LfmUser.id == SyncJob.user_id)
+        .where(active, LfmUser.last_synced_at.is_(None))
+    )
+    if first_imports >= settings.max_active_first_imports:
+        raise ImportQueueFull
 
 
 def _start_job(db: Engine, job_id: int, info: UserInfo) -> _JobState:

@@ -9,6 +9,9 @@ from sqlalchemy import Connection, Engine, func, select
 # Rodzaje blokad (pierwsza część klucza); druga część rozróżnia np. osoby
 IMPORT_LOCK = 1  # import historii jednej osoby; druga część klucza to id osoby
 ENRICHMENT_LOCK = 2  # wzbogacanie artystów; jedna blokada na całą aplikację
+# Sprawdzanie limitów przy zakładaniu importu (blokada na czas transakcji): dwa zlecenia
+# w tej samej chwili nie przekroczą limitu razem
+IMPORT_ADMISSION_LOCK = 3
 
 
 def try_lock(db: Engine, kind: int, key: int = 0) -> Connection | None:

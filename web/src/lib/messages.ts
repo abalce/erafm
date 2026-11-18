@@ -8,6 +8,10 @@ const MESSAGES: Record<string, string> = {
 	internal_error: 'Coś poszło nie tak po naszej stronie. Spróbuj ponownie.',
 	invalid_username: 'To nie wygląda na nick Last.fm.',
 	not_imported: 'Nie mamy jeszcze historii tej osoby.',
+	import_queue_full:
+		'Właśnie trwają importy innych osób, a serwer pobiera najwyżej kilka naraz. Spróbuj za kilka minut.',
+	user_limit_reached:
+		'Erafm ma już komplet osób: to mały projekt na darmowym serwerze. Możesz obejrzeć profile demo na stronie startowej.',
 	api_unavailable:
 		'Nie udało się połączyć z serwerem Erafm. Sprawdź, czy działa, i spróbuj ponownie.'
 };
@@ -20,5 +24,7 @@ export function errorMessage(code: string): string {
 
 /** Czy ponowienie tej samej prośby ma sens (przy złym nicku nie ma). */
 export function canRetry(code: string): boolean {
-	return !['user_not_found', 'history_hidden', 'invalid_username'].includes(code);
+	return !['user_not_found', 'history_hidden', 'invalid_username', 'user_limit_reached'].includes(
+		code
+	);
 }

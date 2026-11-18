@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     # Worker kolejki w tym samym procesie co API. Na darmowym hostingu mamy jedną usługę;
     # lokalnie w Docker Compose worker jest osobnym kontenerem.
     run_worker_in_api: bool = False
+    # Limity dla publicznego linku: pierwszy import to do kilkunastu minut pracy workera
+    # i Last.fm, a każda osoba zajmuje miejsce w darmowej bazie. Odświeżanie osób, które
+    # już są w bazie, nie ma limitu.
+    max_active_first_imports: int = 2
+    max_users: int = 20
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 

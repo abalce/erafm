@@ -19,7 +19,9 @@ from . import worker
 from .config import settings
 from .db import engine
 from .importer import (
+    ImportQueueFull,
     ImportStatus,
+    UserLimitReached,
     import_status,
     is_valid_username,
     normalize_username,
@@ -108,7 +110,13 @@ async def sync_user(nick: str, db: Db) -> ImportStatus:
         raise HTTPException(status_code=422, detail="invalid_username")
     # Zapytania do bazy są synchroniczne, więc idą do wątku; zlecenie do kolejki jest
     # asynchroniczne, bo kolejka może dzielić pętlę zdarzeń z workerem w tym procesie
-    if await asyncio.to_thread(open_import, db, username) is not None:
+    try:
+        job = await asyncio.to_thread(open_import, db, username)
+    except ImportQueueFull:
+        raise HTTPException(status_code=429, detail="import_queue_full") from None
+    except UserLimitReached:
+        raise HTTPException(status_code=403, detail="user_limit_reached") from None
+    if job is not None:
         await worker.defer_import(username)
     status = await asyncio.to_thread(import_status, db, username)
     assert status is not None  # open_import założył osobę i zadanie
