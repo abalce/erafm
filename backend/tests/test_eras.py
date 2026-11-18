@@ -1,0 +1,203 @@
+"""Testy wykrywania er: algorytm na sztucznych tygodniach i endpoint na bazie testowej."""
+
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import Engine, text
+from sqlalchemy.orm import Session
+
+from backend.aggregates import recompute_user_stats
+from backend.eras import detect_eras
+from backend.main import app, get_db
+
+START = date(2024, 1, 1)  # poniedziałek
+X = 1000  # id artysty, który ma ery
+
+
+def week(i: int) -> date:
+    return START + timedelta(weeks=i)
+
+
+def history(
+    n_weeks: int, x_weeks: dict[int, int], silent: set[int] = frozenset()
+) -> dict[date, dict[int, int]]:
+    """Tło: co tydzień 20 artystów po 2 odsłuchy, rotacja co 5 tygodni, więc nikt z tła
+    nie dominuje. `x_weeks` dokłada artyście X podaną liczbę odsłuchów w danym tygodniu,
+    a tygodnie z `silent` nie mają odsłuchów."""
+    plays: dict[date, dict[int, int]] = {}
+    for i in range(n_weeks):
+        if i in silent:
+            continue
+        background = {(i % 5) * 20 + k: 2 for k in range(20)}
+        if i in x_weeks:
+            background[X] = x_weeks[i]
+        plays[week(i)] = background
+    return plays
+
+
+def detect(plays: dict[date, dict[int, int]], n_weeks: int):
+    return detect_eras(plays, START, week(n_weeks - 1))
+
+
+def test_ten_weeks_of_one_artist_make_exactly_one_era() -> None:
+    found = detect(history(40, {i: 30 for i in range(15, 25)}), 40)
+
+    assert len(found.eras) == 1
+    era = found.eras[0]
+    assert (era.artist_id, era.first, era.last) == (X, 15, 24)
+    assert era.plays == 300
+    assert era.share == pytest.approx(300 / 700)
+    assert found.episodes == []
+    assert found.silences == []
+
+
+def test_silence_breaks_an_era() -> None:
+    x_weeks = {i: 30 for i in [*range(10, 15), *range(18, 23)]}
+    found = detect(history(40, x_weeks, silent={15, 16, 17}), 40)
+
+    assert [(e.first, e.last) for e in found.eras] == [(10, 14), (18, 22)]
+
+
+def test_short_break_with_normal_listening_does_not_break_an_era() -> None:
+    # te same tygodnie X co wyżej, ale w przerwie słuchasz innych artystów
+    x_weeks = {i: 30 for i in [*range(10, 15), *range(18, 23)]}
+    found = detect(history(40, x_weeks), 40)
+
+    assert [(e.first, e.last, e.owned_weeks) for e in found.eras] == [(10, 22, 10)]
+
+
+def test_short_burst_is_an_episode_not_an_era() -> None:
+    found = detect(history(40, {20: 30, 21: 30}), 40)
+
+    assert found.eras == []
+    assert [(e.artist_id, e.first, e.last) for e in found.episodes] == [(X, 20, 21)]
+
+
+def test_quiet_weeks_count_as_silence() -> None:
+    plays = history(40, {})
+    for i in range(20, 26):
+        plays[week(i)] = {1: 5}  # mniej niż 20 odsłuchów w tygodniu
+
+    found = detect(plays, 40)
+
+    assert found.silences == [(20, 25)]
+
+
+def test_short_silence_is_not_reported() -> None:
+    found = detect(history(40, {}, silent={20, 21, 22}), 40)
+
+    assert found.silences == []
+
+
+def test_diverse_listening_has_no_eras() -> None:
+    found = detect(history(40, {}), 40)
+
+    assert found.eras == [] and found.episodes == []
+    assert found.threshold == 0.05  # dolna granica progu
+
+
+def test_threshold_adapts_to_the_person() -> None:
+    # X ma zaledwie 10% udziału w tygodniu: przy stałym progu 15% nie byłoby ery
+    found = detect(history(40, {i: 5 for i in range(15, 25)}), 40)
+
+    assert [(e.first, e.last) for e in found.eras] == [(15, 24)]
+    assert found.threshold < 0.15
+
+
+# --- endpoint ---
+
+
+@pytest.fixture
+def client(clean_db: Engine) -> Iterator[TestClient]:
+    app.dependency_overrides[get_db] = lambda: clean_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+def add_user(db: Engine, *, synced: bool, job_status: str = "done") -> None:
+    with db.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO lfm_user (id, username, display_name, last_synced_at) "
+                "VALUES (1, 'przykladowa', 'Przykladowa', CASE WHEN :synced THEN now() END)"
+            ),
+            {"synced": synced},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO sync_job (user_id, kind, status, to_ts) "
+                "VALUES (1, 'full', :status, now())"
+            ),
+            {"status": job_status},
+        )
+
+
+def add_radiohead_era(db: Engine) -> None:
+    """Sześć tygodni samego Radiohead od 1.01.2024: co tydzień 20× Creep i 5× Karma Police."""
+    with db.begin() as conn:
+        conn.execute(
+            text("INSERT INTO artist (id, name, name_key) VALUES (1, 'Radiohead', 'radiohead')")
+        )
+        conn.execute(
+            text(
+                "INSERT INTO track (id, artist_id, name, name_key) VALUES "
+                "(1, 1, 'Creep', 'creep'), (2, 1, 'Karma Police', 'karma police')"
+            )
+        )
+        # środy w południe; minuty rozdzielają odsłuchy, bo czas jest częścią klucza
+        plays = [
+            (track_id, datetime(2024, 1, 3, 12, tzinfo=UTC) + timedelta(weeks=w, minutes=m))
+            for w in range(6)
+            for track_id, minutes in [(1, range(20)), (2, range(30, 35))]
+            for m in minutes
+        ]
+        conn.execute(
+            text(
+                "INSERT INTO scrobble (user_id, played_at, track_id, artist_id) "
+                "VALUES (1, :played_at, :track_id, 1)"
+            ),
+            [{"played_at": at, "track_id": track_id} for track_id, at in plays],
+        )
+    with Session(db) as session:
+        recompute_user_stats(session, 1)
+        session.commit()
+
+
+def test_eras_endpoint(client: TestClient, clean_db: Engine) -> None:
+    add_user(clean_db, synced=True)
+    add_radiohead_era(clean_db)
+
+    response = client.get("/api/users/Przykladowa/eras")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["start"] == "2024-01-01"
+    assert body["eras"] == [
+        {
+            "artist_id": 1,
+            "artist_name": "Radiohead",
+            "image_url": None,
+            "start": "2024-01-01",
+            "end": "2024-02-11",
+            "plays": 150,
+            "share": 1.0,
+            "top_track": {"name": "Creep", "plays": 120},
+        }
+    ]
+    assert body["episodes"] == []
+    # od lutego 2024 do dziś nie ma odsłuchów, więc to jedna długa cisza
+    assert body["silences"][0]["start"] == "2024-02-12"
+
+
+def test_eras_for_unknown_user(client: TestClient) -> None:
+    assert client.get("/api/users/nikt/eras").json() == {"detail": "not_imported"}
+
+
+def test_eras_during_first_import(client: TestClient, clean_db: Engine) -> None:
+    add_user(clean_db, synced=False, job_status="running")
+
+    response = client.get("/api/users/przykladowa/eras")
+
+    assert (response.status_code, response.json()) == (409, {"detail": "import_in_progress"})

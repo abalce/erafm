@@ -110,23 +110,28 @@ _MONTHLY = text("""
 """)
 
 
-def user_stats(db: Engine, username: str, limit: int = 10) -> UserStats:
-    """Statystyki osoby o znormalizowanym nicku. Rzuca NotImported albo ImportInProgress,
-    gdy nie ma jeszcze czego pokazać."""
-    with Session(db) as session:
-        user = session.scalars(select(LfmUser).where(LfmUser.username == username)).first()
-        if user is None:
-            raise NotImported
-        if user.last_synced_at is None:
-            # Żaden import się jeszcze nie zakończył: trwa pierwszy albo się nie udał
-            status = session.scalar(
-                select(SyncJob.status)
-                .where(SyncJob.user_id == user.id)
-                .order_by(SyncJob.id.desc())
-                .limit(1)
-            )
-            raise ImportInProgress if status in ("pending", "running") else NotImported
+def find_imported_user(session: Session, username: str) -> LfmUser:
+    """Osoba o znormalizowanym nicku, której historię mamy. Rzuca NotImported albo
+    ImportInProgress, gdy nie ma jeszcze czego pokazać."""
+    user = session.scalars(select(LfmUser).where(LfmUser.username == username)).first()
+    if user is None:
+        raise NotImported
+    if user.last_synced_at is None:
+        # Żaden import się jeszcze nie zakończył: trwa pierwszy albo się nie udał
+        status = session.scalar(
+            select(SyncJob.status)
+            .where(SyncJob.user_id == user.id)
+            .order_by(SyncJob.id.desc())
+            .limit(1)
+        )
+        raise ImportInProgress if status in ("pending", "running") else NotImported
+    return user
 
+
+def user_stats(db: Engine, username: str, limit: int = 10) -> UserStats:
+    """Statystyki osoby o znormalizowanym nicku (wyjątki jak w find_imported_user)."""
+    with Session(db) as session:
+        user = find_imported_user(session, username)
         params = {"user_id": user.id, "limit": limit, "timezone": settings.app_timezone}
         return UserStats(
             username=user.username,

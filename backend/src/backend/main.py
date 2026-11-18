@@ -18,6 +18,7 @@ from starlette.types import Scope
 from . import worker
 from .config import settings
 from .db import engine
+from .eras import UserEras, user_eras
 from .importer import (
     ImportQueueFull,
     ImportStatus,
@@ -138,6 +139,17 @@ def stats(nick: str, db: Db, limit: int = 10) -> UserStats:
         raise HTTPException(status_code=422, detail="invalid_limit")
     try:
         return user_stats(db, normalize_username(nick), limit)
+    except NotImported:
+        raise HTTPException(status_code=404, detail="not_imported") from None
+    except ImportInProgress:
+        raise HTTPException(status_code=409, detail="import_in_progress") from None
+
+
+@api.get("/users/{nick}/eras")
+def eras(nick: str, db: Db) -> UserEras:
+    """Ery artystów, krótsze epizody i okresy ciszy na osi całej historii."""
+    try:
+        return user_eras(db, normalize_username(nick))
     except NotImported:
         raise HTTPException(status_code=404, detail="not_imported") from None
     except ImportInProgress:
