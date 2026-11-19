@@ -4,7 +4,7 @@
 	import { page } from '$app/state';
 	import { ApiError, getEras, type UserEras } from '#lib/api.ts';
 	import EraTimeline from '#lib/EraTimeline.svelte';
-	import { eraItems, type EraItem } from '#lib/eras.ts';
+	import { artistColors, eraItems, streamSeries, type EraItem } from '#lib/eras.ts';
 	import { formatDay, formatMonthRange, formatPercent, formatPlays } from '#lib/format.ts';
 	import { canRetry, errorMessage } from '#lib/messages.ts';
 
@@ -37,7 +37,11 @@
 		};
 	});
 
-	const items = $derived(view.kind === 'ready' ? eraItems(view.data) : []);
+	const colors = $derived(
+		view.kind === 'ready' ? artistColors(view.data) : new Map<number, string>()
+	);
+	const items = $derived(view.kind === 'ready' ? eraItems(view.data, colors) : []);
+	const streams = $derived(view.kind === 'ready' ? streamSeries(view.data, colors) : []);
 	const eras = $derived(items.filter((item) => item.kind === 'era'));
 	const episodes = $derived(items.filter((item) => item.kind === 'episode'));
 
@@ -131,6 +135,8 @@
 		<EraTimeline
 			{items}
 			silences={view.data.silences}
+			{streams}
+			weeks={view.data.streams.weeks}
 			start={view.data.start}
 			end={view.data.end}
 			{selected}

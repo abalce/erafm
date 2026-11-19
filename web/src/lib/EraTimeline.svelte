@@ -1,13 +1,36 @@
 <script lang="ts">
-	import { scaleUtc, select, zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from 'd3';
+	import {
+		area,
+		curveBasis,
+		pointer,
+		scaleLinear,
+		scaleUtc,
+		select,
+		stack,
+		stackOffsetSilhouette,
+		stackOrderInsideOut,
+		zoom,
+		zoomIdentity,
+		type SeriesPoint,
+		type ZoomBehavior,
+		type ZoomTransform
+	} from 'd3';
 	import type { Attachment } from 'svelte/attachments';
 	import type { Silence } from '#lib/api.ts';
-	import type { EraItem } from '#lib/eras.ts';
-	import { formatCount, formatMonthRange, formatPlays } from '#lib/format.ts';
+	import type { EraItem, StreamSeries } from '#lib/eras.ts';
+	import {
+		formatCount,
+		formatDay,
+		formatMonthRange,
+		formatPercent,
+		formatPlays
+	} from '#lib/format.ts';
 
 	let {
 		items,
 		silences,
+		streams,
+		weeks,
 		start,
 		end,
 		selected,
@@ -15,6 +38,10 @@
 	}: {
 		items: EraItem[];
 		silences: Silence[];
+		/** Strumienie udziałów artystów; `shares` mają tyle liczb, ile jest tygodni */
+		streams: StreamSeries[];
+		/** Poniedziałki kolejnych tygodni */
+		weeks: string[];
 		/** Pierwszy i ostatni dzień osi, np. `2023-03-27` */
 		start: string;
 		end: string;
@@ -26,11 +53,13 @@
 	// Najbliższe przybliżenie: tyle dni na całą szerokość osi
 	const MIN_VISIBLE_DAYS = 60;
 
-	const HEIGHT = 96;
 	const TRACK_TOP = 8;
 	const TRACK_HEIGHT = 52;
 	const EPISODE_HEIGHT = 20;
-	const AXIS_Y = 70;
+	const STREAM_TOP = 72;
+	const STREAM_BOTTOM = 222;
+	const AXIS_Y = 232;
+	const HEIGHT = 258;
 
 	const uid = $props.id();
 	let svg: SVGSVGElement | undefined = $state();
@@ -49,6 +78,51 @@
 	);
 	const zx = $derived(transform.rescaleX(x));
 	const ticks = $derived(zx.ticks(Math.max(2, Math.floor(width / 90))));
+
+	// Streamgraph: d3.stack układa udziały warstwami, przesunięcie „silhouette” układa całość symetrycznie
+	// wokół środka, a „inside out” kładzie największe strumienie w środku. Punkty stoją
+	// w połowie tygodnia, żeby strumień rósł pod pasem ery, a nie obok niego.
+	const weekMiddles = $derived(weeks.map((week) => new Date(toDate(week).getTime() + 3.5 * DAY)));
+	const layers = $derived(
+		stack<number[], number>()
+			.keys(streams.map((_, i) => i))
+			.value((row, i) => row[i])
+			.offset(stackOffsetSilhouette)
+			.order(stackOrderInsideOut)(weeks.map((_, w) => streams.map((s) => s.shares[w] ?? 0)))
+	);
+	const y = $derived.by(() => {
+		const low = Math.min(0, ...layers.flatMap((layer) => layer.map((point) => point[0])));
+		const high = Math.max(0, ...layers.flatMap((layer) => layer.map((point) => point[1])));
+		return scaleLinear()
+			.domain([low, high === low ? low + 1 : high])
+			.range([STREAM_BOTTOM, STREAM_TOP]);
+	});
+	const paths = $derived.by(() => {
+		const shape = area<SeriesPoint<number[]>>()
+			.x((_, i) => zx(weekMiddles[i]))
+			.y0((point) => y(point[0]))
+			.y1((point) => y(point[1]))
+			.curve(curveBasis);
+		return layers.map((layer) => ({ index: layer.key, d: shape(layer) ?? '' }));
+	});
+
+	// Dymek nad streamgraphem: który artysta i który tydzień są pod kursorem lub palcem
+	let hover = $state<{ series: number; week: number; left: number; top: number } | null>(null);
+	function onStreamPointer(event: PointerEvent, series: number) {
+		if (!svg) return;
+		const [left, top] = pointer(event, svg);
+		const weekLength = 7 * DAY;
+		const week = Math.round(
+			(zx.invert(left).getTime() - toDate(weeks[0]).getTime()) / weekLength - 0.5
+		);
+		hover = { series, week: Math.min(weeks.length - 1, Math.max(0, week)), left, top };
+	}
+
+	// Zaznaczona era albo strumień pod kursorem przygasza pozostałe strumienie
+	const selectedArtist = $derived(items.find((item) => item.key === selected)?.era.artist_id);
+	const highlighted = $derived(
+		hover?.series ?? streams.findIndex((series) => series.id === selectedArtist)
+	);
 
 	const shortMonth = new Intl.DateTimeFormat('pl-PL', { month: 'short', timeZone: 'UTC' });
 	function tickLabel(date: Date): string {
@@ -72,6 +146,9 @@
 			`${formatCount(eraCount, ['era', 'ery', 'er'])}, ` +
 			`${formatCount(items.length - eraCount, ['epizod', 'epizody', 'epizodów'])}, ` +
 			`${formatCount(silences.length, ['okres', 'okresy', 'okresów'])} ciszy. ` +
+			(streams.length > 0
+				? `Pod pasami er strumienie udziałów artystów: ${streams.map((s) => s.name).join(', ')}. `
+				: '') +
 			'Ery można też przeglądać na liście pod osią.'
 	);
 
@@ -92,6 +169,7 @@
 			.clickDistance(4)
 			.on('zoom', (event: { transform: ZoomTransform }) => {
 				transform = event.transform;
+				hover = null; // dymek wskazywałby już inny tydzień
 			});
 		const selection = select(element);
 		selection.call(behavior).call(behavior.transform, zoomIdentity);
@@ -160,6 +238,20 @@
 					</rect>
 				{/each}
 
+				<g class="streams" class:dimmed={highlighted >= 0}>
+					{#each paths as path (path.index)}
+						<path
+							role="presentation"
+							d={path.d}
+							fill={streams[path.index].color}
+							class:active={path.index === highlighted}
+							onpointermove={(event) => onStreamPointer(event, path.index)}
+							onpointerdown={(event) => onStreamPointer(event, path.index)}
+							onpointerleave={() => (hover = null)}
+						/>
+					{/each}
+				</g>
+
 				{#each items as item (item.key)}
 					{@const left = zx(toDate(item.era.start))}
 					{@const barWidth = Math.max(2, zx(after(item.era.end)) - left)}
@@ -200,6 +292,14 @@
 				{/each}
 			</g>
 		</svg>
+		{#if hover}
+			{@const series = streams[hover.series]}
+			<div class="tip" style:left="{hover.left}px" style:top="{hover.top}px">
+				<strong>{series.name}</strong>
+				<span>tydzień od {formatDay(weeks[hover.week])}</span>
+				<span>{formatPercent(series.shares[hover.week])} odsłuchów</span>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -210,9 +310,18 @@
 	{/if}
 </div>
 
+{#if streams.length > 0}
+	<ul class="stream-legend" aria-label="Artyści w strumieniach">
+		{#each streams as series (series.id)}
+			<li><span class="swatch" style:background={series.color}></span>{series.name}</li>
+		{/each}
+	</ul>
+{/if}
+
 <style>
 	.timeline {
-		min-height: 96px;
+		position: relative;
+		min-height: 258px;
 		cursor: grab;
 	}
 
@@ -266,6 +375,58 @@
 		font-size: 13px;
 		font-weight: 600;
 		pointer-events: none;
+	}
+
+	.streams path {
+		opacity: 0.85;
+		transition: opacity 0.15s ease;
+	}
+
+	.streams.dimmed path {
+		opacity: 0.25;
+	}
+
+	.streams.dimmed path.active {
+		opacity: 1;
+	}
+
+	.tip {
+		position: absolute;
+		z-index: 1;
+		display: flex;
+		flex-direction: column;
+		padding: var(--space-2) var(--space-3);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-small);
+		background: var(--surface-raised);
+		font-size: 0.8125rem;
+		line-height: 1.4;
+		white-space: nowrap;
+		pointer-events: none;
+		/* nad punktem i wyśrodkowany; przy krawędziach ekranu lekko przycięty, ale czytelny */
+		transform: translate(-50%, calc(-100% - 12px));
+	}
+
+	.stream-legend {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2) var(--space-4);
+		margin: var(--space-2) 0 0;
+		padding: 0;
+		list-style: none;
+		font-size: 0.875rem;
+	}
+
+	.stream-legend li {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
+	.stream-legend .swatch {
+		width: 0.75rem;
+		height: 0.75rem;
+		border-radius: 50%;
 	}
 
 	.axis line {

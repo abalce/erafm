@@ -9,7 +9,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from backend.aggregates import recompute_user_stats
-from backend.eras import detect_eras
+from backend.eras import detect_eras, stream_artists, stream_shares
 from backend.main import app, get_db
 
 START = date(2024, 1, 1)  # poniedziałek
@@ -106,6 +106,34 @@ def test_threshold_adapts_to_the_person() -> None:
     assert found.threshold < 0.15
 
 
+def test_stream_artists_start_with_era_artists_then_most_played() -> None:
+    y, z = 2000, 3000
+    plays = history(40, {i: 30 for i in range(5, 15)})  # era X: 300 odsłuchów
+    for i in range(25, 30):
+        plays[week(i)][y] = 40  # era Y: 200 odsłuchów, mniej niż X
+    for i in range(40):
+        plays[week(i)][z] = 1  # Z bez ery, ale 40 odsłuchów: więcej niż ktokolwiek z tła
+
+    found = detect(plays, 40)
+
+    assert [e.artist_id for e in found.eras] == [X, y]
+    # tło ma po 16 odsłuchów na artystę, więc remis rozstrzyga mniejsze id
+    assert stream_artists(found, limit=4) == [X, y, z, 0]
+    assert stream_artists(found, limit=1) == [X]
+
+
+def test_stream_shares_are_smoothed_and_zero_in_silence() -> None:
+    found = detect(history(40, {20: 30}, silent={30}), 40)
+
+    [shares] = stream_shares(found, [X])
+
+    one_week = 30 / 70 / 5  # jeden tydzień z udziałem 30/70 w oknie pięciu tygodni
+    assert len(shares) == 40
+    assert shares[18] == shares[20] == shares[22] == pytest.approx(one_week, abs=1e-4)
+    assert shares[17] == shares[23] == 0
+    assert shares[30] == 0
+
+
 # --- endpoint ---
 
 
@@ -187,6 +215,11 @@ def test_eras_endpoint(client: TestClient, clean_db: Engine) -> None:
         }
     ]
     assert body["episodes"] == []
+    streams = body["streams"]
+    assert streams["artists"] == [{"id": 1, "name": "Radiohead"}]
+    assert streams["weeks"][:2] == ["2024-01-01", "2024-01-08"]
+    assert len(streams["shares"][0]) == len(streams["weeks"])
+    assert streams["shares"][0][:6] == [1.0] * 6
     # od lutego 2024 do dziś nie ma odsłuchów, więc to jedna długa cisza
     assert body["silences"][0]["start"] == "2024-02-12"
 

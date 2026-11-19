@@ -79,6 +79,21 @@ export interface Silence {
 	end: string;
 }
 
+export interface StreamArtist {
+	id: number;
+	name: string;
+}
+
+/** Udziały artystów tydzień po tygodniu (streamgraph pod osią er) */
+export interface Streams {
+	/** Kolejność wyznacza kolory: najpierw artyści z er, potem najczęściej słuchani */
+	artists: StreamArtist[];
+	/** Poniedziałki kolejnych tygodni */
+	weeks: string[];
+	/** `shares[artysta][tydzień]`, wygładzone, 0-1 */
+	shares: number[][];
+}
+
 export interface UserEras {
 	username: string;
 	/** Zakres osi: od tygodnia pierwszego odsłuchu do bieżącego; null, gdy brak odsłuchów */
@@ -89,6 +104,7 @@ export interface UserEras {
 	eras: Era[];
 	episodes: Era[];
 	silences: Silence[];
+	streams: Streams;
 }
 
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
