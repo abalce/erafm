@@ -13,6 +13,17 @@
 	--on-accent: #1d1108;
 	--danger: #ff7a8c;
 
+	/* Kolory artystów na osi er: jasne i nasycone, żeby odcinały się od ciemnego tła */
+	--era-1: #ff8a5b;
+	--era-2: #5bc0ff;
+	--era-3: #c38bff;
+	--era-4: #4fd6a0;
+	--era-5: #ffd166;
+	--era-6: #ff6f9c;
+	--era-7: #8fa8ff;
+	--era-8: #a4e05a;
+	--era-other: #6f6884;
+
 	--font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 	--font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
 

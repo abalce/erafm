@@ -1,7 +1,7 @@
 import { PUBLIC_API_URL } from '$app/env/public';
 
 // Kształty odpowiedzi API; ich źródłem są modele Pydantic w backendzie
-// (backend/src/backend/importer.py i stats.py)
+// (backend/src/backend/importer.py, stats.py i eras.py)
 
 export type ImportState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -51,6 +51,44 @@ export interface UserStats {
 	top_artists: TopArtist[];
 	top_tracks: TopTrack[];
 	monthly: MonthlyPlays[];
+}
+
+export interface EraTrack {
+	name: string;
+	plays: number;
+}
+
+/** Era albo epizod: okres, w którym jeden artysta przeważał nad resztą */
+export interface Era {
+	artist_id: number;
+	artist_name: string;
+	image_url: string | null;
+	/** Poniedziałek pierwszego tygodnia, np. `2024-05-27` */
+	start: string;
+	/** Niedziela ostatniego tygodnia */
+	end: string;
+	plays: number;
+	/** Udział artysty we wszystkich odsłuchach okresu, 0-1 */
+	share: number;
+	top_track: EraTrack | null;
+}
+
+/** Co najmniej kilka tygodni prawie bez słuchania */
+export interface Silence {
+	start: string;
+	end: string;
+}
+
+export interface UserEras {
+	username: string;
+	/** Zakres osi: od tygodnia pierwszego odsłuchu do bieżącego; null, gdy brak odsłuchów */
+	start: string | null;
+	end: string | null;
+	/** Próg udziału użyty dla tej osoby */
+	threshold: number;
+	eras: Era[];
+	episodes: Era[];
+	silences: Silence[];
 }
 
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
@@ -103,4 +141,8 @@ export function getStatus(nick: string): Promise<ImportStatus> {
 
 export function getStats(nick: string): Promise<UserStats> {
 	return request(`${userPath(nick)}/stats`);
+}
+
+export function getEras(nick: string): Promise<UserEras> {
+	return request(`${userPath(nick)}/eras`);
 }

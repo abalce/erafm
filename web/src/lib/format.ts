@@ -31,3 +31,39 @@ export function formatPlays(count: number): string {
 	const form = { one: 'odsłuch', few: 'odsłuchy' }[pluralRules.select(count) as string];
 	return `${formatNumber(count)} ${form ?? 'odsłuchów'}`;
 }
+
+// Daty z API typu `2024-05-27` to północ UTC, więc formatujemy je w UTC: w strefie
+// z ujemnym przesunięciem wypadłby dzień wcześniej
+const dayFormat = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'long', timeZone: 'UTC' });
+const monthOnlyFormat = new Intl.DateTimeFormat('pl-PL', { month: 'long', timeZone: 'UTC' });
+
+/** `2024-05-27` -> „27 maja 2024” */
+export function formatDay(day: string): string {
+	return dayFormat.format(new Date(day));
+}
+
+/** Okres w miesiącach: „maj 2024”, „maj–sierpień 2024”, „grudzień 2024 – styczeń 2025” */
+export function formatMonthRange(start: string, end: string): string {
+	const from = new Date(start);
+	const to = new Date(end);
+	const sameYear = from.getUTCFullYear() === to.getUTCFullYear();
+	if (sameYear && from.getUTCMonth() === to.getUTCMonth()) return formatMonth(from);
+	if (sameYear) return `${monthOnlyFormat.format(from)}–${formatMonth(to)}`;
+	return `${formatMonth(from)} – ${formatMonth(to)}`;
+}
+
+const percentFormat = new Intl.NumberFormat('pl-PL', {
+	style: 'percent',
+	maximumFractionDigits: 1
+});
+
+/** 0.096 -> „9,6%” */
+export function formatPercent(value: number): string {
+	return percentFormat.format(value);
+}
+
+/** Liczba z odmienionym rzeczownikiem: formatCount(5, ['era', 'ery', 'er']) -> „5 er” */
+export function formatCount(count: number, [one, few, many]: [string, string, string]): string {
+	const rule = pluralRules.select(count);
+	return `${formatNumber(count)} ${rule === 'one' ? one : rule === 'few' ? few : many}`;
+}
