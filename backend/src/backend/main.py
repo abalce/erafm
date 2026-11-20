@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,7 @@ from .config import settings
 from .db import engine
 from .duet import Duet, duet
 from .eras import UserEras, user_eras
+from .friends import FriendSuggestion, user_friends
 from .importer import (
     ImportQueueFull,
     ImportStatus,
@@ -31,6 +33,7 @@ from .importer import (
     normalize_username,
     open_import,
 )
+from .lastfm import LastfmError, UserNotFound
 from .stats import MAX_LIMIT, ImportInProgress, NotImported, UserStats, user_stats
 from .today import OnThisDay, on_this_day
 
@@ -203,6 +206,21 @@ def artist(nick: str, artist_id: int, db: Db) -> ArtistHistory:
         raise HTTPException(status_code=404, detail="not_imported") from None
     except ImportInProgress:
         raise HTTPException(status_code=409, detail="import_in_progress") from None
+
+
+@api.get("/users/{nick}/friends")
+async def friends(nick: str, db: Db) -> list[FriendSuggestion]:
+    """Znajomi osoby z Last.fm do podpowiedzi w duecie; najpierw osoby już w Erafm."""
+    username = normalize_username(nick)
+    if not is_valid_username(username):
+        raise HTTPException(status_code=422, detail="invalid_username")
+    try:
+        return await user_friends(db, username)
+    except UserNotFound:
+        raise HTTPException(status_code=404, detail="user_not_found") from None
+    except (LastfmError, httpx.HTTPError):
+        logger.exception("Nie udało się pobrać znajomych z Last.fm")
+        raise HTTPException(status_code=502, detail="lastfm_error") from None
 
 
 app.include_router(api)

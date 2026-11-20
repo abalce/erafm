@@ -6,7 +6,9 @@
 		ApiError,
 		getDuet,
 		getEras,
+		getFriends,
 		type Duet,
+		type FriendSuggestion,
 		type InfectionSide,
 		type UserEras
 	} from '#lib/api.ts';
@@ -42,6 +44,32 @@
 	$effect(() => {
 		first = nicks[0] ?? '';
 		second = nicks[1] ?? '';
+	});
+
+	// Podpowiedzi: znajomi pierwszej osoby z Last.fm. Po pisaniu czekamy chwilę, żeby nie
+	// pytać o każdą literę; nick z adresu (np. z profilu) pytamy od razu
+	const FRIENDS_DELAY_MS = 500;
+	let friends = $state<{ of: string; list: FriendSuggestion[] } | null>(null);
+	$effect(() => {
+		const nick = first.trim().toLowerCase();
+		friends = null;
+		if (pair || !isValidUsername(nick)) return;
+		let cancelled = false;
+		const timer = setTimeout(
+			() => {
+				getFriends(nick)
+					.then((list) => {
+						if (!cancelled) friends = { of: nick, list };
+					})
+					// Podpowiedzi są dodatkiem: przy błędzie po prostu ich nie ma
+					.catch(() => {});
+			},
+			nick === nicks[0] ? 0 : FRIENDS_DELAY_MS
+		);
+		return () => {
+			cancelled = true;
+			clearTimeout(timer);
+		};
 	});
 
 	function compare(event: SubmitEvent) {
@@ -247,6 +275,29 @@
 					/>
 				</label>
 			</div>
+			{#if friends && friends.list.length > 0}
+				<div class="friends">
+					<p class="muted">Znajomi {friends.of} na Last.fm:</p>
+					<ul>
+						{#each friends.list as friend (friend.username)}
+							<li>
+								<button
+									type="button"
+									class="friend"
+									aria-pressed={second.trim().toLowerCase() === friend.username}
+									onclick={() => {
+										second = friend.username;
+										formError = '';
+									}}
+								>
+									{friend.display_name}
+									{#if friend.in_erafm}<span class="known">w Erafm</span>{/if}
+								</button>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 			<button class="button" type="submit">Porównaj</button>
 			{#if formError}
 				<p class="error" role="alert">{formError}</p>
@@ -461,6 +512,40 @@
 		border-radius: var(--radius-small);
 		background: var(--surface);
 		font-weight: 400;
+	}
+
+	.friends {
+		margin-bottom: var(--space-4);
+	}
+
+	.friends ul {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2);
+		margin: var(--space-2) 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.friend {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-1) var(--space-3);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: var(--surface);
+		cursor: pointer;
+	}
+
+	.friend:hover,
+	.friend[aria-pressed='true'] {
+		border-color: var(--accent);
+	}
+
+	.known {
+		color: var(--accent);
+		font-size: 0.75rem;
 	}
 
 	.error {

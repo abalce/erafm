@@ -2,7 +2,7 @@ import { PUBLIC_API_URL } from '$app/env/public';
 
 // Kształty odpowiedzi API; ich źródłem są modele Pydantic w backendzie
 // (backend/src/backend/importer.py, stats.py, eras.py, today.py, duet.py, infection.py,
-// compat.py i artist.py)
+// compat.py, artist.py i friends.py)
 
 export type ImportState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -236,6 +236,17 @@ export interface ArtistHistory {
 	weeks: { week: string; plays: number }[];
 }
 
+/** Znajomy z Last.fm podpowiadany w formularzu duetu */
+export interface FriendSuggestion {
+	/** Małymi literami, gotowy do adresu */
+	username: string;
+	/** Pisownia z Last.fm */
+	display_name: string;
+	image_url: string | null;
+	/** Historia jest już w bazie, więc duet otworzy się bez importu */
+	in_erafm: boolean;
+}
+
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
 export class ApiError extends Error {
 	readonly code: string;
@@ -304,4 +315,9 @@ export function getDuet(first: string, second: string): Promise<Duet> {
 
 export function getArtist(nick: string, artistId: number): Promise<ArtistHistory> {
 	return request(`${userPath(nick)}/artists/${artistId}`);
+}
+
+/** Znajomi osoby z Last.fm; najpierw osoby już w Erafm */
+export function getFriends(nick: string): Promise<FriendSuggestion[]> {
+	return request(`${userPath(nick)}/friends`);
 }

@@ -111,6 +111,28 @@ class UserInfo(BaseModel):
         )
 
 
+class Friend(BaseModel):
+    username: str  # pisownia jak na profilu Last.fm
+    image_url: str | None  # największy obrazek, jeśli jest
+
+    @classmethod
+    def list_from_api(cls, data: dict[str, Any]) -> list["Friend"]:
+        users = data.get("friends", {}).get("user", [])
+        # Jeden znajomy przychodzi jako obiekt, a nie lista
+        if isinstance(users, dict):
+            users = [users]
+        friends = []
+        for user in users:
+            images = [image["#text"] for image in user.get("image", []) if image.get("#text")]
+            friends.append(
+                cls(
+                    username=user["name"],
+                    image_url=images[-1] if images else None,
+                )
+            )
+        return friends
+
+
 class Scrobble(BaseModel):
     artist_name: str
     artist_mbid: str | None
@@ -236,6 +258,11 @@ class LastfmClient:
 
     async def get_user_info(self, username: str) -> UserInfo:
         return UserInfo.from_api(await self._call("user.getinfo", UserNotFound, user=username))
+
+    async def get_friends(self, username: str, limit: int = 50) -> list[Friend]:
+        """Pierwsza strona znajomych osoby (do `limit`)."""
+        data = await self._call("user.getfriends", UserNotFound, user=username, limit=limit)
+        return Friend.list_from_api(data)
 
     async def get_artist_info(self, name: str) -> ArtistInfo:
         # autocorrect=0: chcemy danych dokładnie tego artysty, którego mamy w scrobblach
