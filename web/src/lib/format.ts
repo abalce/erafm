@@ -106,3 +106,19 @@ export function formatDayMonth(day: string): string {
 export function formatYearsAgo(years: number): string {
 	return `${formatCount(years, ['rok', 'lata', 'lat'])} temu`;
 }
+
+const compactFormat = new Intl.NumberFormat('pl-PL', { maximumFractionDigits: 1 });
+
+/** 5_000_000 -> „5 mln słuchaczy”, 596_379 -> „596 tys. słuchaczy”, 42 -> „42 słuchaczy” */
+export function formatListeners(count: number): string {
+	if (count >= 1_000_000) return `${compactFormat.format(count / 1_000_000)} mln słuchaczy`;
+	if (count >= 1_000) return `${Math.round(count / 1_000)} tys. słuchaczy`;
+	return formatCount(count, ['słuchacz', 'słuchaczy', 'słuchaczy']);
+}
+
+const listFormat = new Intl.ListFormat('pl-PL', { style: 'long', type: 'conjunction' });
+
+/** ['A', 'B', 'C'] -> „A, B i C” */
+export function formatList(items: string[]): string {
+	return listFormat.format(items);
+}

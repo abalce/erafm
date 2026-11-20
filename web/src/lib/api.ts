@@ -2,7 +2,7 @@ import { PUBLIC_API_URL } from '$app/env/public';
 
 // Kształty odpowiedzi API; ich źródłem są modele Pydantic w backendzie
 // (backend/src/backend/importer.py, stats.py, eras.py, today.py, duet.py, infection.py,
-// compat.py, artist.py i friends.py)
+// compat.py, artist.py, friends.py i recommend.py)
 
 export type ImportState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -247,6 +247,33 @@ export interface FriendSuggestion {
 	in_erafm: boolean;
 }
 
+/** Pozycje suwaka „mainstream–nisza” w API */
+export type Popularity = 'known' | 'all' | 'lesser' | 'niche';
+
+export interface Recommendation {
+	artist_id: number;
+	name: string;
+	listeners: number | null;
+	score: number;
+	/** Ziarna o największym wkładzie, od największego */
+	because: string[];
+}
+
+export interface Recommendations {
+	username: string;
+	popularity: Popularity;
+	tag: string | null;
+	/** Ilu ostatnio słuchanych artystów służy za ziarna */
+	seeds: number;
+	/** Ile ziaren czeka jeszcze na pobranie podobnych artystów */
+	pending: number;
+	/** Kandydaci bez danych z Last.fm: widać ich tylko bez filtrów */
+	missing_data: number;
+	/** Najczęstsze tagi gatunkowe w puli kandydatów */
+	tags: string[];
+	items: Recommendation[];
+}
+
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
 export class ApiError extends Error {
 	readonly code: string;
@@ -320,4 +347,14 @@ export function getArtist(nick: string, artistId: number): Promise<ArtistHistory
 /** Znajomi osoby z Last.fm; najpierw osoby już w Erafm */
 export function getFriends(nick: string): Promise<FriendSuggestion[]> {
 	return request(`${userPath(nick)}/friends`);
+}
+
+export function getRecommendations(
+	nick: string,
+	popularity: Popularity,
+	tag: string | null
+): Promise<Recommendations> {
+	const query = new URLSearchParams({ popularity });
+	if (tag) query.set('tag', tag);
+	return request(`${userPath(nick)}/recommendations?${query}`);
 }

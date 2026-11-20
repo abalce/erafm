@@ -8,7 +8,12 @@
 	const nick = $derived(page.params.nick ?? '');
 	const tabs = $derived([
 		{ label: 'Profil', route: '/u/[nick]', href: resolve('/u/[nick]', { nick }) },
-		{ label: 'Ery', route: '/u/[nick]/ery', href: resolve('/u/[nick]/ery', { nick }) }
+		{ label: 'Ery', route: '/u/[nick]/ery', href: resolve('/u/[nick]/ery', { nick }) },
+		{
+			label: 'Odkrywaj',
+			route: '/u/[nick]/odkrywaj',
+			href: resolve('/u/[nick]/odkrywaj', { nick })
+		}
 	]);
 </script>
 
@@ -26,12 +31,14 @@
 <style>
 	nav {
 		display: flex;
+		flex-wrap: wrap;
 		gap: var(--space-2);
 		border-bottom: 1px solid var(--border);
 	}
 
 	a {
 		padding: var(--space-2) var(--space-3);
+		white-space: nowrap;
 		margin-bottom: -1px;
 		border-bottom: 2px solid transparent;
 		color: var(--text-muted);
