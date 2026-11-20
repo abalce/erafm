@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
+from .models import LfmUser
 from .stats import find_imported_user
 
 
@@ -133,6 +134,24 @@ def infections(
     ]
 
 
+def infection_sides(
+    session: Session, a: LfmUser, b: LfmUser, params: InfectionParams = DEFAULT_PARAMS
+) -> DuetInfections:
+    """Zarażenia w obie strony: najpierw a → b, potem b → a."""
+    sides = []
+    for source, target in [(a, b), (b, a)]:
+        found = infections(session, source.id, target.id, params)
+        sides.append(
+            InfectionSide(
+                source=source.username,
+                target=target.username,
+                infections=found,
+                balance=round(sum(i.weight for i in found), 4),
+            )
+        )
+    return DuetInfections(sides=sides)
+
+
 def duet_infections(
     db: Engine, first: str, second: str, params: InfectionParams = DEFAULT_PARAMS
 ) -> DuetInfections:
@@ -141,15 +160,4 @@ def duet_infections(
     with Session(db) as session:
         a = find_imported_user(session, first)
         b = find_imported_user(session, second)
-        sides = []
-        for source, target in [(a, b), (b, a)]:
-            found = infections(session, source.id, target.id, params)
-            sides.append(
-                InfectionSide(
-                    source=source.username,
-                    target=target.username,
-                    infections=found,
-                    balance=round(sum(i.weight for i in found), 4),
-                )
-            )
-        return DuetInfections(sides=sides)
+        return infection_sides(session, a, b, params)

@@ -19,6 +19,7 @@ from starlette.types import Scope
 from . import worker
 from .config import settings
 from .db import engine
+from .duet import Duet, duet
 from .eras import UserEras, user_eras
 from .importer import (
     ImportQueueFull,
@@ -168,6 +169,21 @@ def today(nick: str, db: Db, date: str | None = None) -> OnThisDay:
         raise HTTPException(status_code=422, detail="invalid_date") from None
     try:
         return on_this_day(db, normalize_username(nick), day)
+    except NotImported:
+        raise HTTPException(status_code=404, detail="not_imported") from None
+    except ImportInProgress:
+        raise HTTPException(status_code=409, detail="import_in_progress") from None
+
+
+@api.get("/duet")
+def duet_view(u: str, db: Db) -> Duet:
+    """Zarażenia w obie strony i kompatybilność dwóch osób: `u=nick1,nick2`, pierwsza
+    osoba to „ty”. Import każdej osoby zleca się osobno przez /users/{nick}/sync."""
+    nicks = [normalize_username(nick) for nick in u.split(",")]
+    if len(nicks) != 2 or nicks[0] == nicks[1] or not all(map(is_valid_username, nicks)):
+        raise HTTPException(status_code=422, detail="invalid_duet")
+    try:
+        return duet(db, *nicks)
     except NotImported:
         raise HTTPException(status_code=404, detail="not_imported") from None
     except ImportInProgress:
