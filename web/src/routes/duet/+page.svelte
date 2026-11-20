@@ -143,6 +143,12 @@
 		duet ? Math.max(...duet.infections.sides.map((side) => side.balance), 0.0001) : 1
 	);
 
+	// Widok jednego artysty w tym duecie
+	function artistHref(artistId: number): string {
+		const nicks = pair ? pair.map(encodeURIComponent).join(',') : '';
+		return `${resolve('/duet/artysta')}?u=${nicks}&id=${artistId}`;
+	}
+
 	function sortedInfections(side: InfectionSide) {
 		return [...side.infections].sort(
 			(a, b) => b.target_plays - a.target_plays || a.artist_id - b.artist_id
@@ -188,6 +194,7 @@
 				items={(open ? list : list.slice(0, SHOWN_INFECTIONS)).map((infection) => ({
 					id: infection.artist_id,
 					name: infection.artist_name,
+					href: artistHref(infection.artist_id),
 					detail:
 						`${side.target} od ${formatDay(infection.target_first_at.slice(0, 10))} · ` +
 						`${side.source}: ${formatPlays(infection.source_plays)} w 90 dniach przed`,
@@ -361,6 +368,7 @@
 					items={compat.connecting.map((artist) => ({
 						id: artist.artist_id,
 						name: artist.name,
+						href: artistHref(artist.artist_id),
 						detail: `${pair[0]}: ${formatPlays(artist.plays_first)} · ${pair[1]}: ${formatPlays(artist.plays_second)}`,
 						plays: artist.plays_first + artist.plays_second
 					}))}
@@ -382,6 +390,7 @@
 								items={group.list.map((artist) => ({
 									id: artist.artist_id,
 									name: artist.name,
+									href: artistHref(artist.artist_id),
 									detail: `${group.other}: ${formatPlays(artist.other_plays)}`,
 									plays: artist.plays
 								}))}

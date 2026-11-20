@@ -17,6 +17,7 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from . import worker
+from .artist import ArtistHistory, ArtistNotFound, artist_history
 from .config import settings
 from .db import engine
 from .duet import Duet, duet
@@ -184,6 +185,20 @@ def duet_view(u: str, db: Db) -> Duet:
         raise HTTPException(status_code=422, detail="invalid_duet")
     try:
         return duet(db, *nicks)
+    except NotImported:
+        raise HTTPException(status_code=404, detail="not_imported") from None
+    except ImportInProgress:
+        raise HTTPException(status_code=409, detail="import_in_progress") from None
+
+
+@api.get("/users/{nick}/artists/{artist_id}")
+def artist(nick: str, artist_id: int, db: Db) -> ArtistHistory:
+    """Pierwszy odsłuch i odsłuchy tydzień po tygodniu jednego artysty u jednej osoby.
+    Osoba, która go nie słuchała, dostaje zero odsłuchów, a nie błąd."""
+    try:
+        return artist_history(db, normalize_username(nick), artist_id)
+    except ArtistNotFound:
+        raise HTTPException(status_code=404, detail="artist_not_found") from None
     except NotImported:
         raise HTTPException(status_code=404, detail="not_imported") from None
     except ImportInProgress:

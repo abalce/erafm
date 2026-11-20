@@ -9,6 +9,8 @@
 		plays: number;
 		/** `undefined`: lista bez obrazków; `null`: jest miejsce na obrazek, ale go nie mamy */
 		imageUrl?: string | null;
+		/** Adres widoku pozycji (np. artysty w duecie); bez niego nazwa nie jest linkiem */
+		href?: string;
 	}
 
 	let { items }: { items: Item[] } = $props();
@@ -27,7 +29,13 @@
 				<span class="placeholder" aria-hidden="true">{item.name.charAt(0).toUpperCase()}</span>
 			{/if}
 			<span class="text">
-				<span class="name">{item.name}</span>
+				{#if item.href}
+					<!-- href przychodzi gotowy z resolve() u wywołującego -->
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+					<a class="name" href={item.href}>{item.name}</a>
+				{:else}
+					<span class="name">{item.name}</span>
+				{/if}
 				{#if item.detail}
 					<span class="detail">{item.detail}</span>
 				{/if}
@@ -93,6 +101,15 @@
 	.name {
 		font-weight: 600;
 		overflow-wrap: anywhere;
+	}
+
+	a.name {
+		color: var(--text);
+		text-decoration-color: var(--border);
+	}
+
+	a.name:hover {
+		color: var(--accent-strong);
 	}
 
 	.detail {

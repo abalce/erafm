@@ -8,6 +8,7 @@ const MESSAGES: Record<string, string> = {
 	internal_error: 'Coś poszło nie tak po naszej stronie. Spróbuj ponownie.',
 	invalid_username: 'To nie wygląda na nick Last.fm.',
 	invalid_duet: 'Do duetu potrzebne są dwa różne nicki Last.fm.',
+	artist_not_found: 'Nie mamy takiego artysty w bazie.',
 	not_imported: 'Nie mamy jeszcze historii tej osoby.',
 	import_queue_full:
 		'Właśnie trwają importy innych osób, a serwer pobiera najwyżej kilka naraz. Spróbuj za kilka minut.',
@@ -30,6 +31,7 @@ export function canRetry(code: string): boolean {
 		'history_hidden',
 		'invalid_username',
 		'invalid_duet',
+		'artist_not_found',
 		'user_limit_reached'
 	].includes(code);
 }

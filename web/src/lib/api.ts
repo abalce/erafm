@@ -1,8 +1,8 @@
 import { PUBLIC_API_URL } from '$app/env/public';
 
 // Kształty odpowiedzi API; ich źródłem są modele Pydantic w backendzie
-// (backend/src/backend/importer.py, stats.py, eras.py, today.py, duet.py, infection.py
-// i compat.py)
+// (backend/src/backend/importer.py, stats.py, eras.py, today.py, duet.py, infection.py,
+// compat.py i artist.py)
 
 export type ImportState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -220,6 +220,22 @@ export interface Duet {
 	compatibility: Compatibility;
 }
 
+/** Historia jednego artysty u jednej osoby */
+export interface ArtistHistory {
+	username: string;
+	artist_id: number;
+	name: string;
+	listeners: number | null;
+	image_url: string | null;
+	/** 0, gdy osoba nie słuchała tego artysty */
+	total_plays: number;
+	first_at: string | null;
+	last_at: string | null;
+	first_track: string | null;
+	/** Tylko tygodnie z odsłuchami (poniedziałki), od najstarszego */
+	weeks: { week: string; plays: number }[];
+}
+
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
 export class ApiError extends Error {
 	readonly code: string;
@@ -284,4 +300,8 @@ export function getToday(nick: string, date?: string | null): Promise<OnThisDay>
 
 export function getDuet(first: string, second: string): Promise<Duet> {
 	return request(`/duet?u=${encodeURIComponent(`${first},${second}`)}`);
+}
+
+export function getArtist(nick: string, artistId: number): Promise<ArtistHistory> {
+	return request(`${userPath(nick)}/artists/${artistId}`);
 }
