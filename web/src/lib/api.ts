@@ -1,7 +1,8 @@
 import { PUBLIC_API_URL } from '$app/env/public';
 
 // Kształty odpowiedzi API; ich źródłem są modele Pydantic w backendzie
-// (backend/src/backend/importer.py, stats.py, eras.py i today.py)
+// (backend/src/backend/importer.py, stats.py, eras.py, today.py, duet.py, infection.py
+// i compat.py)
 
 export type ImportState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -152,6 +153,73 @@ export interface OnThisDay {
 	anniversaries: Anniversary[];
 }
 
+/** Prawdopodobne zarażenie: `source` słuchał(a) artysty tuż przed pierwszym odsłuchem `target` */
+export interface Infection {
+	artist_id: number;
+	artist_name: string;
+	listeners: number | null;
+	/** Waga niszowości: mniej znani artyści ważą więcej */
+	weight: number;
+	source_first_at: string;
+	/** Odsłuchy zarażającej osoby w 90 dniach przed pierwszym odsłuchem zarażonej */
+	source_plays: number;
+	target_first_at: string;
+	target_plays: number;
+}
+
+export interface InfectionSide {
+	source: string;
+	target: string;
+	infections: Infection[];
+	/** Suma wag */
+	balance: number;
+}
+
+export interface YearCompat {
+	year: number;
+	/** 0-1 */
+	similarity: number;
+	shared_artists: number;
+	plays_first: number;
+	plays_second: number;
+}
+
+export interface SharedArtist {
+	artist_id: number;
+	name: string;
+	plays_first: number;
+	plays_second: number;
+}
+
+export interface DisputedArtist {
+	artist_id: number;
+	name: string;
+	plays: number;
+	other_plays: number;
+}
+
+export interface Compatibility {
+	first: string;
+	second: string;
+	/** Początek wspólnego okresu; null, gdy któraś osoba nie ma odsłuchów */
+	since: string | null;
+	similarity: number;
+	shared_artists: number;
+	years: YearCompat[];
+	/** Od najbardziej łączącego */
+	connecting: SharedArtist[];
+	disputed_first: DisputedArtist[];
+	disputed_second: DisputedArtist[];
+}
+
+export interface Duet {
+	/** W kolejności z adresu */
+	people: { username: string; display_name: string }[];
+	/** Najpierw pierwsza → druga osoba, potem odwrotnie */
+	infections: { sides: InfectionSide[] };
+	compatibility: Compatibility;
+}
+
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
 export class ApiError extends Error {
 	readonly code: string;
@@ -212,4 +280,8 @@ export function getEras(nick: string): Promise<UserEras> {
 export function getToday(nick: string, date?: string | null): Promise<OnThisDay> {
 	const query = date ? `?date=${encodeURIComponent(date)}` : '';
 	return request(`${userPath(nick)}/today${query}`);
+}
+
+export function getDuet(first: string, second: string): Promise<Duet> {
+	return request(`/duet?u=${encodeURIComponent(`${first},${second}`)}`);
 }

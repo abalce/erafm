@@ -61,6 +61,18 @@
 					</a>
 				</li>
 			{/each}
+			{#if PUBLIC_DEMO_USERS.length >= 2}
+				{@const [a, b] = PUBLIC_DEMO_USERS}
+				<li>
+					<a
+						class="tile"
+						href="{resolve('/duet')}?u={encodeURIComponent(a)},{encodeURIComponent(b)}"
+					>
+						<span class="tile-name">{a} i {b}</span>
+						<span class="muted">duet demo</span>
+					</a>
+				</li>
+			{/if}
 		</ul>
 	</section>
 {/if}

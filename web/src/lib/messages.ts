@@ -7,6 +7,7 @@ const MESSAGES: Record<string, string> = {
 	lastfm_error: 'Last.fm chwilowo nie odpowiada. Spróbuj ponownie za chwilę.',
 	internal_error: 'Coś poszło nie tak po naszej stronie. Spróbuj ponownie.',
 	invalid_username: 'To nie wygląda na nick Last.fm.',
+	invalid_duet: 'Do duetu potrzebne są dwa różne nicki Last.fm.',
 	not_imported: 'Nie mamy jeszcze historii tej osoby.',
 	import_queue_full:
 		'Właśnie trwają importy innych osób, a serwer pobiera najwyżej kilka naraz. Spróbuj za kilka minut.',
@@ -24,7 +25,11 @@ export function errorMessage(code: string): string {
 
 /** Czy ponowienie tej samej prośby ma sens (przy złym nicku nie ma). */
 export function canRetry(code: string): boolean {
-	return !['user_not_found', 'history_hidden', 'invalid_username', 'user_limit_reached'].includes(
-		code
-	);
+	return ![
+		'user_not_found',
+		'history_hidden',
+		'invalid_username',
+		'invalid_duet',
+		'user_limit_reached'
+	].includes(code);
 }

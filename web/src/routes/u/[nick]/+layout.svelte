@@ -18,6 +18,7 @@
 			{tab.label}
 		</a>
 	{/each}
+	<a class="duet" href="{resolve('/duet')}?u={encodeURIComponent(nick)}">Porównaj z kimś</a>
 </nav>
 
 {@render children()}
@@ -40,6 +41,11 @@
 
 	a:hover {
 		color: var(--text);
+	}
+
+	.duet {
+		margin-left: auto;
+		font-weight: 400;
 	}
 
 	a[aria-current='page'] {

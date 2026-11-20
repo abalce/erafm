@@ -1,22 +1,13 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import {
-		ApiError,
-		getStats,
-		getStatus,
-		startSync,
-		type ImportStatus,
-		type UserStats
-	} from '#lib/api.ts';
+	import { ApiError, getStats, type UserStats } from '#lib/api.ts';
 	import { formatDate, formatNumber } from '#lib/format.ts';
+	import { watchImport } from '#lib/importWatch.ts';
 	import { canRetry, errorMessage } from '#lib/messages.ts';
 	import MonthlyChart from '#lib/MonthlyChart.svelte';
 	import OnThisDay from '#lib/OnThisDay.svelte';
 	import TopList from '#lib/TopList.svelte';
-
-	// Co ile pytamy API o postęp importu
-	const POLL_MS = 2000;
 
 	type View =
 		| { kind: 'loading' }
@@ -34,58 +25,40 @@
 		void attempt;
 
 		let cancelled = false;
-		let timer: ReturnType<typeof setTimeout> | undefined;
 		let statsShown = false;
+		// Statystyki pobieramy po każdym stanie `ready`; numer odrzuca odpowiedź, która
+		// przyszła po nowszej (np. sprzed zakończenia odświeżania)
+		let request = 0;
 		view = { kind: 'loading' };
 
-		async function showStats(refreshing: boolean, refreshFailed: boolean) {
-			const stats = await getStats(current);
-			if (cancelled) return;
-			statsShown = true;
-			view = { kind: 'ready', stats, refreshing, refreshFailed };
-		}
-
-		async function handle(status: ImportStatus) {
-			if (cancelled) return;
-			const hasHistory = status.last_synced_at !== null;
-
-			if (status.status === 'done') {
-				await showStats(false, false);
-				return;
+		const stop = watchImport(current, async (state) => {
+			if (state.kind === 'importing') {
+				view = { kind: 'importing', progress: state.progress };
+			} else if (state.kind === 'error') {
+				view = { kind: 'error', code: state.code };
+			} else if (state.kind === 'ready') {
+				const mine = ++request;
+				try {
+					const stats = await getStats(current);
+					if (cancelled || mine !== request) return;
+					statsShown = true;
+					view = {
+						kind: 'ready',
+						stats,
+						refreshing: state.refreshing,
+						refreshFailed: state.refreshFailed
+					};
+				} catch (error) {
+					// Gdy dane są już na ekranie, nieudane pobranie ich nie zasłania
+					if (cancelled || statsShown) return;
+					view = { kind: 'error', code: error instanceof ApiError ? error.code : 'unknown_error' };
+				}
 			}
-			if (status.status === 'failed') {
-				if (hasHistory) await showStats(false, true);
-				else view = { kind: 'error', code: status.error ?? 'unknown_error' };
-				return;
-			}
-
-			// pending albo running: przy pierwszym imporcie pasek postępu, przy odświeżaniu
-			// od razu dotychczasowe dane, a nowe po zakończeniu
-			if (!hasHistory) view = { kind: 'importing', progress: status.progress };
-			else if (!statsShown) await showStats(true, false);
-			if (!cancelled) timer = setTimeout(poll, POLL_MS);
-		}
-
-		async function poll() {
-			try {
-				await handle(await getStatus(current));
-			} catch (error) {
-				fail(error);
-			}
-		}
-
-		function fail(error: unknown) {
-			// Gdy dane są już na ekranie, nieudane odpytanie o postęp ich nie zasłania
-			if (cancelled || statsShown) return;
-			view = { kind: 'error', code: error instanceof ApiError ? error.code : 'unknown_error' };
-		}
-
-		// Otwarcie profilu od razu zleca import albo odświeżenie historii
-		startSync(current).then(handle).catch(fail);
+		});
 
 		return () => {
 			cancelled = true;
-			clearTimeout(timer);
+			stop();
 		};
 	});
 </script>
