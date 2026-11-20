@@ -67,3 +67,26 @@ export function formatCount(count: number, [one, few, many]: [string, string, st
 	const rule = pluralRules.select(count);
 	return `${formatNumber(count)} ${rule === 'one' ? one : rule === 'few' ? few : many}`;
 }
+
+/**
+ * Czas między dwoma chwilami w latach i miesiącach, a gdy to mniej niż miesiąc, w dniach:
+ * „1 rok i 7 miesięcy”, „3 miesiące”, „12 dni”
+ */
+export function formatDuration(fromIso: string, toIso: string): string {
+	const from = new Date(fromIso);
+	const to = new Date(toIso);
+	let months =
+		(to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth());
+	if (to.getUTCDate() < from.getUTCDate()) months -= 1;
+	if (months < 1) {
+		const days = Math.max(0, Math.floor((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000)));
+		return formatCount(days, ['dzień', 'dni', 'dni']);
+	}
+	const years = Math.floor(months / 12);
+	const rest = months % 12;
+	const parts = [
+		years > 0 ? formatCount(years, ['rok', 'lata', 'lat']) : '',
+		rest > 0 ? formatCount(rest, ['miesiąc', 'miesiące', 'miesięcy']) : ''
+	];
+	return parts.filter(Boolean).join(' i ');
+}

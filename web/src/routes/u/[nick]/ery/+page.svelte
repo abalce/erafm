@@ -5,8 +5,16 @@
 	import { ApiError, getEras, type UserEras } from '#lib/api.ts';
 	import EraTimeline from '#lib/EraTimeline.svelte';
 	import { artistColors, eraItems, streamSeries, type EraItem } from '#lib/eras.ts';
-	import { formatDay, formatMonthRange, formatPercent, formatPlays } from '#lib/format.ts';
+	import {
+		formatDate,
+		formatDay,
+		formatDuration,
+		formatMonthRange,
+		formatPercent,
+		formatPlays
+	} from '#lib/format.ts';
 	import { canRetry, errorMessage } from '#lib/messages.ts';
+	import TopList from '#lib/TopList.svelte';
 
 	type View =
 		{ kind: 'loading' } | { kind: 'ready'; data: UserEras } | { kind: 'error'; code: string };
@@ -95,12 +103,35 @@
 								{formatPlays(era.plays)}, czyli {formatPercent(era.share)} wszystkich w tym czasie
 							</dd>
 						</div>
-						{#if era.top_track}
-							<div>
-								<dt>Najczęściej grany utwór</dt>
-								<dd>{era.top_track.name} ({formatPlays(era.top_track.plays)})</dd>
-							</div>
-						{/if}
+						<div>
+							<dt>Pierwszy i ostatni odsłuch w tym czasie</dt>
+							<dd>{formatDate(era.first_play_at)} · {formatDate(era.last_play_at)}</dd>
+						</div>
+						<div>
+							<dt>Od czego się zaczęło</dt>
+							<dd>
+								{era.artist_first.track_name}, {formatDate(era.artist_first.played_at)}
+								<span class="muted">
+									{#if Date.parse(era.artist_first.played_at) >= Date.parse(era.first_play_at)}
+										(pierwszy odsłuch otworzył tę erę)
+									{:else}
+										({formatDuration(era.artist_first.played_at, era.first_play_at)} przed tym okresem)
+									{/if}
+								</span>
+							</dd>
+						</div>
+						<div>
+							<dt>Najczęściej grane w tym czasie</dt>
+							<dd class="tracks">
+								<TopList
+									items={era.top_tracks.map((track, i) => ({
+										id: i,
+										name: track.name,
+										plays: track.plays
+									}))}
+								/>
+							</dd>
+						</div>
 					</dl>
 				{/if}
 			</li>

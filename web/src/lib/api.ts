@@ -58,6 +58,11 @@ export interface EraTrack {
 	plays: number;
 }
 
+export interface FirstPlay {
+	track_name: string;
+	played_at: string;
+}
+
 /** Era albo epizod: okres, w którym jeden artysta przeważał nad resztą */
 export interface Era {
 	artist_id: number;
@@ -70,7 +75,13 @@ export interface Era {
 	plays: number;
 	/** Udział artysty we wszystkich odsłuchach okresu, 0-1 */
 	share: number;
-	top_track: EraTrack | null;
+	/** Pierwszy i ostatni odsłuch artysty w tym okresie (znaczniki czasu) */
+	first_play_at: string;
+	last_play_at: string;
+	/** Do pięciu utworów, od najczęściej granego */
+	top_tracks: EraTrack[];
+	/** Pierwszy odsłuch artysty w całej historii */
+	artist_first: FirstPlay;
 }
 
 /** Co najmniej kilka tygodni prawie bez słuchania */

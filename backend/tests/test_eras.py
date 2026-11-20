@@ -211,7 +211,10 @@ def test_eras_endpoint(client: TestClient, clean_db: Engine) -> None:
             "end": "2024-02-11",
             "plays": 150,
             "share": 1.0,
-            "top_track": {"name": "Creep", "plays": 120},
+            "first_play_at": "2024-01-03T12:00:00Z",
+            "last_play_at": "2024-02-07T12:34:00Z",
+            "top_tracks": [{"name": "Creep", "plays": 120}, {"name": "Karma Police", "plays": 30}],
+            "artist_first": {"track_name": "Creep", "played_at": "2024-01-03T12:00:00Z"},
         }
     ]
     assert body["episodes"] == []
@@ -222,6 +225,56 @@ def test_eras_endpoint(client: TestClient, clean_db: Engine) -> None:
     assert streams["shares"][0][:6] == [1.0] * 6
     # od lutego 2024 do dziś nie ma odsłuchów, więc to jedna długa cisza
     assert body["silences"][0]["start"] == "2024-02-12"
+
+
+def test_era_details_top_five_and_first_play(client: TestClient, clean_db: Engine) -> None:
+    add_user(clean_db, synced=True)
+    with clean_db.begin() as conn:
+        conn.execute(
+            text("INSERT INTO artist (id, name, name_key) VALUES (1, 'Radiohead', 'radiohead')")
+        )
+        conn.execute(
+            text(
+                "INSERT INTO track (id, artist_id, name, name_key) "
+                "SELECT k, 1, 'Utwór ' || k, 'utwór ' || k FROM generate_series(1, 7) AS k"
+            )
+        )
+        # sześć tygodni od 1.01.2024: utwór k ma co tydzień 8 - k odsłuchów (28 tygodniowo)
+        plays = [
+            (k, datetime(2024, 1, 3, 12, tzinfo=UTC) + timedelta(weeks=w, minutes=k * 10 + j))
+            for w in range(6)
+            for k in range(1, 8)
+            for j in range(8 - k)
+        ]
+        plays += [
+            # pierwszy raz w ogóle, dawno przed erą (ten tydzień ma za mało odsłuchów na erę)
+            (7, datetime(2023, 6, 1, 12, tzinfo=UTC)),
+            # w Polsce to już 1 stycznia 2024, więc odsłuch należy do ery
+            (1, datetime(2023, 12, 31, 23, 30, tzinfo=UTC)),
+        ]
+        conn.execute(
+            text(
+                "INSERT INTO scrobble (user_id, played_at, track_id, artist_id) "
+                "VALUES (1, :played_at, :track_id, 1)"
+            ),
+            [{"played_at": at, "track_id": track_id} for track_id, at in plays],
+        )
+    with Session(clean_db) as session:
+        recompute_user_stats(session, 1)
+        session.commit()
+
+    [era] = client.get("/api/users/przykladowa/eras").json()["eras"]
+
+    assert (era["start"], era["end"]) == ("2024-01-01", "2024-02-11")
+    assert era["top_tracks"] == [
+        {"name": "Utwór 1", "plays": 43},
+        {"name": "Utwór 2", "plays": 36},
+        {"name": "Utwór 3", "plays": 30},
+        {"name": "Utwór 4", "plays": 24},
+        {"name": "Utwór 5", "plays": 18},
+    ]
+    assert era["first_play_at"] == "2023-12-31T23:30:00Z"
+    assert era["artist_first"] == {"track_name": "Utwór 7", "played_at": "2023-06-01T12:00:00Z"}
 
 
 def test_eras_for_unknown_user(client: TestClient) -> None:

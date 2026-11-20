@@ -211,6 +211,13 @@ class EraTrack(BaseModel):
     plays: int
 
 
+class FirstPlay(BaseModel):
+    """Pierwszy odsłuch artysty w całej historii osoby."""
+
+    track_name: str
+    played_at: datetime
+
+
 class Era(BaseModel):
     artist_id: int
     artist_name: str
@@ -219,7 +226,10 @@ class Era(BaseModel):
     end: date  # niedziela ostatniego tygodnia
     plays: int
     share: float
-    top_track: EraTrack | None
+    first_play_at: datetime  # pierwszy i ostatni odsłuch artysty w tym okresie
+    last_play_at: datetime
+    top_tracks: list[EraTrack]  # najwyżej TOP_TRACKS, od najczęściej granego
+    artist_first: FirstPlay
 
 
 class Silence(BaseModel):
@@ -255,18 +265,57 @@ _WEEKLY = text("SELECT week, artist_id, plays FROM weekly_artist_stats WHERE use
 
 _ARTISTS = text("SELECT id, name, image_url FROM artist WHERE id = ANY(:ids)")
 
-# Granice okresu są datami w strefie aplikacji; AT TIME ZONE zamienia je na chwile w czasie
-_TOP_TRACK = text("""
-    SELECT t.name, count(*) AS plays
-    FROM scrobble s
+TOP_TRACKS = 5
+
+# Szczegóły wszystkich okresów jednym zapytaniem: unnest robi z tablic tabelę okresów
+# (numer, artysta, pierwszy dzień, dzień po ostatnim). Granice są datami w strefie
+# aplikacji; AT TIME ZONE zamienia je na chwile w czasie. Okna liczą pierwszy i ostatni
+# odsłuch całego okresu, zanim odetniemy utwory spoza pierwszej piątki.
+_PERIOD_TRACKS = text("""
+    WITH periods AS (
+        SELECT *
+        FROM unnest(
+            CAST(:idx AS int[]),
+            CAST(:artist_ids AS bigint[]),
+            CAST(:starts AS date[]),
+            CAST(:ends AS date[])
+        ) AS p (idx, artist_id, start_day, end_day)
+    ),
+    tracks AS (
+        SELECT p.idx, s.track_id, count(*) AS plays,
+               min(s.played_at) AS first_at, max(s.played_at) AS last_at
+        FROM periods p
+        JOIN scrobble s
+          ON s.user_id = :user_id
+         AND s.artist_id = p.artist_id
+         AND s.played_at >= p.start_day::timestamp AT TIME ZONE :timezone
+         AND s.played_at < p.end_day::timestamp AT TIME ZONE :timezone
+        GROUP BY p.idx, s.track_id
+    ),
+    ranked AS (
+        SELECT *,
+               row_number() OVER (PARTITION BY idx ORDER BY plays DESC, track_id) AS rank,
+               min(first_at) OVER (PARTITION BY idx) AS period_first,
+               max(last_at) OVER (PARTITION BY idx) AS period_last
+        FROM tracks
+    )
+    SELECT r.idx, t.name, r.plays, r.period_first, r.period_last
+    FROM ranked r
+    JOIN track t ON t.id = r.track_id
+    WHERE r.rank <= :top
+    ORDER BY r.idx, r.rank
+""")
+
+# Pierwszy utwór każdego artysty: first_listen zna chwilę pierwszego odsłuchu, więc
+# wystarczy dobrać scrobble z dokładnie tą chwilą (szybko dzięki kluczowi po czasie)
+_ARTIST_FIRST = text("""
+    SELECT DISTINCT ON (f.artist_id) f.artist_id, t.name AS track_name, f.first_at AS played_at
+    FROM first_listen f
+    JOIN scrobble s
+      ON s.user_id = f.user_id AND s.artist_id = f.artist_id AND s.played_at = f.first_at
     JOIN track t ON t.id = s.track_id
-    WHERE s.user_id = :user_id
-      AND s.artist_id = :artist_id
-      AND s.played_at >= (:start)::timestamp AT TIME ZONE :timezone
-      AND s.played_at < (:end)::timestamp AT TIME ZONE :timezone
-    GROUP BY t.id, t.name
-    ORDER BY plays DESC, t.id
-    LIMIT 1
+    WHERE f.user_id = :user_id AND f.artist_id = ANY(:ids)
+    ORDER BY f.artist_id, s.track_id
 """)
 
 
@@ -303,37 +352,56 @@ def user_eras(db: Engine, username: str, params: EraParams = DEFAULT_PARAMS) -> 
         ids = sorted({b.artist_id for b in [*found.eras, *found.episodes]} | set(streamed))
         artists = {row.id: row for row in session.execute(_ARTISTS, {"ids": ids})}
 
-        def era(block: Block) -> Era:
-            first, last = found.weeks[block.first], found.weeks[block.last]
-            top = session.execute(
-                _TOP_TRACK,
-                {
-                    "user_id": user.id,
-                    "artist_id": block.artist_id,
-                    "start": first,
-                    "end": last + WEEK,
-                    "timezone": timezone,
-                },
-            ).first()
+        blocks = [*found.eras, *found.episodes]
+        details: dict[int, list] = defaultdict(list)
+        for row in session.execute(
+            _PERIOD_TRACKS,
+            {
+                "user_id": user.id,
+                "timezone": timezone,
+                "top": TOP_TRACKS,
+                "idx": list(range(len(blocks))),
+                "artist_ids": [b.artist_id for b in blocks],
+                "starts": [found.weeks[b.first] for b in blocks],
+                "ends": [found.weeks[b.last] + WEEK for b in blocks],
+            },
+        ):
+            details[row.idx].append(row)
+        firsts = {
+            row.artist_id: FirstPlay(track_name=row.track_name, played_at=row.played_at)
+            for row in session.execute(
+                _ARTIST_FIRST,
+                {"user_id": user.id, "ids": sorted({b.artist_id for b in blocks})},
+            )
+        }
+
+        def era(idx: int) -> Era:
+            block = blocks[idx]
+            # Okres zawsze ma odsłuchy swojego artysty: tylko takie tygodnie należą do ery
+            rows = details[idx]
             artist = artists[block.artist_id]
             return Era(
                 artist_id=block.artist_id,
                 artist_name=artist.name,
                 image_url=artist.image_url,
-                start=first,
-                end=last + timedelta(days=6),
+                start=found.weeks[block.first],
+                end=found.weeks[block.last] + timedelta(days=6),
                 plays=block.plays,
                 share=round(block.share, 3),
-                top_track=EraTrack(name=top.name, plays=top.plays) if top else None,
+                first_play_at=rows[0].period_first,
+                last_play_at=rows[0].period_last,
+                top_tracks=[EraTrack(name=row.name, plays=row.plays) for row in rows],
+                artist_first=firsts[block.artist_id],
             )
 
+        n_eras = len(found.eras)
         return UserEras(
             username=user.username,
             start=start,
             end=end + timedelta(days=6),
             threshold=round(found.threshold, 3),
-            eras=[era(b) for b in found.eras],
-            episodes=[era(b) for b in found.episodes],
+            eras=[era(i) for i in range(n_eras)],
+            episodes=[era(i) for i in range(n_eras, len(blocks))],
             silences=[
                 Silence(start=found.weeks[a], end=found.weeks[b] + timedelta(days=6))
                 for a, b in found.silences
