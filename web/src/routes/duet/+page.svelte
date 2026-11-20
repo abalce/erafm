@@ -2,8 +2,17 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { ApiError, getDuet, type Duet, type InfectionSide } from '#lib/api.ts';
+	import {
+		ApiError,
+		getDuet,
+		getEras,
+		type Duet,
+		type InfectionSide,
+		type UserEras
+	} from '#lib/api.ts';
 	import CompatChart from '#lib/CompatChart.svelte';
+	import DuetEras from '#lib/DuetEras.svelte';
+	import { duetColors, eraItems } from '#lib/eras.ts';
 	import { formatCount, formatDay, formatPercent, formatPlays } from '#lib/format.ts';
 	import { watchImport, type ImportState } from '#lib/importWatch.ts';
 	import { canRetry, errorMessage } from '#lib/messages.ts';
@@ -53,6 +62,8 @@
 	let people = $state<Record<string, ImportState>>({});
 	let duet = $state<Duet | null>(null);
 	let duetError = $state<string | null>(null);
+	// Ery obu osób do wspólnej osi; to dodatek, więc błąd po prostu ją ukrywa
+	let eras = $state<UserEras[] | null>(null);
 	let attempt = $state(0);
 	let expanded = $state<Record<string, boolean>>({});
 
@@ -62,6 +73,7 @@
 		people = {};
 		duet = null;
 		duetError = null;
+		eras = null;
 		expanded = {};
 		if (!current) return;
 
@@ -76,6 +88,8 @@
 			try {
 				const result = await getDuet(current![0], current![1]);
 				if (!cancelled && mine === request) duet = result;
+				const both = await Promise.all(current!.map((nick) => getEras(nick)));
+				if (!cancelled && mine === request) eras = both;
 			} catch (error) {
 				if (cancelled || mine !== request || duet) return;
 				duetError = error instanceof ApiError ? error.code : 'unknown_error';
@@ -103,6 +117,22 @@
 	);
 	// Osoby, których historii nie da się pobrać (np. nie ma takiego konta)
 	const failed = $derived(pair ? pair.filter((nick) => people[nick]?.kind === 'error') : []);
+	const eraRows = $derived.by(() => {
+		if (!eras) return null;
+		const withHistory = eras.filter((person) => person.start !== null && person.end !== null);
+		if (withHistory.length < 2) return null;
+		const colors = duetColors(withHistory);
+		return {
+			rows: withHistory.map((person) => ({
+				nick: person.username,
+				items: eraItems(person, colors),
+				silences: person.silences,
+				start: person.start!
+			})),
+			start: withHistory.map((person) => person.start!).sort()[0],
+			end: withHistory.map((person) => person.end!).sort()[withHistory.length - 1]
+		};
+	});
 	const bestYear = $derived(
 		duet && duet.compatibility.years.length > 1
 			? duet.compatibility.years.reduce((best, y) => (y.similarity > best.similarity ? y : best))
@@ -279,6 +309,22 @@
 				<CompatChart years={compat.years} {currentYear} />
 			{/if}
 		</section>
+
+		{#if eraRows}
+			<section>
+				<h2>Ery obu osób</h2>
+				<p class="muted">
+					Okresy, w których jeden artysta wyraźnie przeważał. Ten sam artysta ma ten sam kolor u obu
+					osób.
+				</p>
+				<DuetEras rows={eraRows.rows} start={eraRows.start} end={eraRows.end} />
+				<p class="links">
+					{#each eraRows.rows as row (row.nick)}
+						<a href={resolve('/u/[nick]/ery', { nick: row.nick })}>Ery {row.nick}</a>
+					{/each}
+				</p>
+			</section>
+		{/if}
 
 		<section>
 			<h2>Kto komu podrzucił artystów</h2>
@@ -553,6 +599,12 @@
 		align-items: center;
 		gap: var(--space-5);
 		margin-top: var(--space-5);
+	}
+
+	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-5);
 	}
 
 	.again {
