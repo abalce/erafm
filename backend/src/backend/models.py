@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -64,6 +65,8 @@ class Artist(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     # Kiedy ostatnio pytaliśmy Last.fm o artystę (także wtedy, gdy go nie znalazł)
     enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Kiedy ostatnio pobraliśmy podobnych artystów (artist.getSimilar) do rekomendacji
+    similar_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -85,6 +88,18 @@ class ArtistTag(Base):
     tag_id: Mapped[int] = mapped_column(ForeignKey("tag.id"), primary_key=True)
     # Waga 1-100 z Last.fm: 100 ma najczęściej nadawany tag artysty
     weight: Mapped[int] = mapped_column(Integer)
+
+
+class ArtistSimilar(Base):
+    """Podobni artyści z Last.fm (artist.getSimilar); podobny trafia do `artist`, nawet jeśli
+    nikt go jeszcze nie słuchał, żeby wzbogacanie mogło dociągnąć mu słuchaczy i tagi."""
+
+    __tablename__ = "artist_similar"
+
+    artist_id: Mapped[int] = mapped_column(ForeignKey("artist.id"), primary_key=True)
+    similar_id: Mapped[int] = mapped_column(ForeignKey("artist.id"), primary_key=True)
+    # Podobieństwo 0-1 według Last.fm
+    match: Mapped[float] = mapped_column(Float)
 
 
 class Track(Base):

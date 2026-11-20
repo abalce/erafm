@@ -34,6 +34,7 @@ from .importer import (
     open_import,
 )
 from .lastfm import LastfmError, UserNotFound
+from .recommend import Recommendations, recommendations
 from .stats import MAX_LIMIT, ImportInProgress, NotImported, UserStats, user_stats
 from .today import OnThisDay, on_this_day
 
@@ -221,6 +222,22 @@ async def friends(nick: str, db: Db) -> list[FriendSuggestion]:
     except (LastfmError, httpx.HTTPError):
         logger.exception("Nie udało się pobrać znajomych z Last.fm")
         raise HTTPException(status_code=502, detail="lastfm_error") from None
+
+
+@api.get("/users/{nick}/recommendations")
+async def recommend(nick: str, db: Db) -> Recommendations:
+    """Rekomendacje nowych artystów z uzasadnieniem. Gdy części ziaren brakuje podobnych
+    artystów, zleca ich pobranie i zwraca wynik z tego, co już jest (`pending` > 0)."""
+    username = normalize_username(nick)
+    try:
+        result = await asyncio.to_thread(recommendations, db, username)
+    except NotImported:
+        raise HTTPException(status_code=404, detail="not_imported") from None
+    except ImportInProgress:
+        raise HTTPException(status_code=409, detail="import_in_progress") from None
+    if result.pending:
+        await worker.defer_similar(username)
+    return result
 
 
 app.include_router(api)

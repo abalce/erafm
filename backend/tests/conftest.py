@@ -51,7 +51,7 @@ def clean_db(db: Engine) -> Engine:
         conn.execute(
             text(
                 "TRUNCATE lfm_user, artist, track, scrobble, sync_job, tag, artist_tag, "
-                "weekly_artist_stats, first_listen "
+                "weekly_artist_stats, first_listen, artist_similar "
                 "RESTART IDENTITY CASCADE"
             )
         )

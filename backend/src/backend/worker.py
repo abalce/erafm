@@ -15,6 +15,7 @@ from .db import engine
 from .enrichment import run_enrichment
 from .importer import run_import, stalled_imports
 from .lastfm import LastfmClient
+from .similar import run_similar
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,10 @@ async def sync_user(username: str) -> None:
     """Importuje historię osoby: całą za pierwszym razem, potem tylko nowe odsłuchy.
     Wznawia też przerwany import."""
     if await run_import(_lastfm_client(), engine, username):
-        # Nowe odsłuchy mogły przynieść nowych artystów: uzupełniamy ich dane w tle
+        # Nowe odsłuchy mogły przynieść nowych artystów: uzupełniamy ich dane w tle,
+        # a zmienione ziarna rekomendacji potrzebują podobnych artystów
         await _defer_enrichment()
+        await defer_similar(username)
 
 
 async def _defer_enrichment() -> None:
@@ -99,3 +102,21 @@ async def resume_stalled_imports(timestamp: int) -> None:
             logger.info("Wznawiam przerwany import %s", username)
         except procrastinate.exceptions.AlreadyEnqueued:
             logger.debug("Import %s już czeka w kolejce", username)
+
+
+@app.task
+async def fetch_similar(username: str) -> None:
+    """Pobiera podobnych artystów (artist.getSimilar) dla ziaren rekomendacji osoby."""
+    if await run_similar(_lastfm_client(), engine, username):
+        # Nowi kandydaci trafili do bazy bez słuchaczy i tagów
+        await _defer_enrichment()
+
+
+async def defer_similar(username: str) -> None:
+    """Zleca pobranie podobnych artystów osoby. Nic nie robi, gdy takie zlecenie już czeka."""
+    try:
+        await fetch_similar.configure(queueing_lock=f"similar:{username}").defer_async(
+            username=username
+        )
+    except procrastinate.exceptions.AlreadyEnqueued:
+        logger.debug("Podobni artyści %s już czekają w kolejce", username)

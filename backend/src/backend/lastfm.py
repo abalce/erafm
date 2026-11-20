@@ -133,6 +133,28 @@ class Friend(BaseModel):
         return friends
 
 
+class SimilarArtist(BaseModel):
+    name: str
+    mbid: str | None
+    match: float  # 0-1
+
+    @classmethod
+    def list_from_api(cls, data: dict[str, Any]) -> list["SimilarArtist"]:
+        artists = data.get("similarartists", {}).get("artist", [])
+        # Jeden podobny przychodzi jako obiekt, a nie lista
+        if isinstance(artists, dict):
+            artists = [artists]
+        return [
+            cls(
+                name=artist["name"],
+                mbid=_empty_to_none(artist.get("mbid")),
+                match=float(artist.get("match") or 0),
+            )
+            for artist in artists
+            if artist.get("name")
+        ]
+
+
 class Scrobble(BaseModel):
     artist_name: str
     artist_mbid: str | None
@@ -268,6 +290,12 @@ class LastfmClient:
         # autocorrect=0: chcemy danych dokładnie tego artysty, którego mamy w scrobblach
         data = await self._call("artist.getinfo", ArtistNotFound, artist=name, autocorrect=0)
         return ArtistInfo.from_api(data)
+
+    async def get_similar_artists(self, name: str, limit: int = 50) -> list[SimilarArtist]:
+        data = await self._call(
+            "artist.getsimilar", ArtistNotFound, artist=name, limit=limit, autocorrect=0
+        )
+        return SimilarArtist.list_from_api(data)
 
     async def get_artist_top_tags(self, name: str) -> list[ArtistTag]:
         data = await self._call("artist.gettoptags", ArtistNotFound, artist=name, autocorrect=0)
