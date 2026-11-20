@@ -70,10 +70,17 @@ class WeekTable:
         start: date,
         end: date,
         params: EraParams,
+        totals_by_week: dict[date, int] | None = None,
     ) -> None:
         self.weeks = [start + i * WEEK for i in range((end - start) // WEEK + 1)]
-        self.plays = [plays_by_week.get(week, {}) for week in self.weeks]
-        self.totals = [sum(p.values()) for p in self.plays]
+        self.index = {week: i for i, week in enumerate(self.weeks)}
+        self.plays = [dict(plays_by_week.get(week, {})) for week in self.weeks]
+        # Sumy tygodni podane osobno, gdy `plays_by_week` ma tylko część artystów
+        self.totals = (
+            [sum(p.values()) for p in self.plays]
+            if totals_by_week is None
+            else [totals_by_week.get(week, 0) for week in self.weeks]
+        )
         self.active = [total >= params.min_week_plays for total in self.totals]
         half = params.smoothing_weeks // 2
         # Średnią liczymy tylko z aktywnych tygodni okna: cisza obok nie zaniża udziału
@@ -85,6 +92,12 @@ class WeekTable:
             ]
             for i in range(len(self.weeks))
         ]
+
+    def add_rows(self, rows: list[tuple[date, int, int]]) -> None:
+        """Uzupełnia odsłuchy (tydzień, artysta, odsłuchy), np. pełną historię artystów,
+        których pominęło przycinanie."""
+        for week, artist_id, plays in rows:
+            self.plays[self.index[week]][artist_id] = plays
 
     def smoothed(self, i: int, artist_id: int) -> float:
         """Wygładzony udział artysty w tygodniu `i`; w nieaktywnym tygodniu zero."""
@@ -106,6 +119,15 @@ class Detection:
     def weeks(self) -> list[date]:
         return self.table.weeks
 
+    def count_plays(self) -> None:
+        """Liczy odsłuchy i udział artysty w każdym okresie (wołane ponownie, gdy tabela
+        dostanie pełną historię artystów z er)."""
+        table = self.table
+        for block in [*self.eras, *self.episodes]:
+            span = range(block.first, block.last + 1)
+            block.plays = sum(table.plays[j].get(block.artist_id, 0) for j in span)
+            block.share = block.plays / sum(table.totals[j] for j in span)
+
 
 def _quantile(values: list[float], q: float) -> float:
     ordered = sorted(values)
@@ -117,17 +139,24 @@ def detect_eras(
     start: date,
     end: date,
     params: EraParams = DEFAULT_PARAMS,
+    totals_by_week: dict[date, int] | None = None,
 ) -> Detection:
     """Wykrywa ery w tygodniach od `start` do `end` (poniedziałki, włącznie).
-    `plays_by_week` to {tydzień: {id artysty: odsłuchy}}; brakujące tygodnie mają zero."""
-    table = WeekTable(plays_by_week, start, end, params)
-    weeks, plays, totals, active = table.weeks, table.plays, table.totals, table.active
+    `plays_by_week` to {tydzień: {id artysty: odsłuchy}}; brakujące tygodnie mają zero.
 
-    # Najlepszy kandydat w każdym aktywnym tygodniu; remis rozstrzyga mniejsze id artysty
+    Wystarczą wiersze artystów, którzy w promieniu `prune_reach_weeks` tygodni mieli
+    choć raz udział co najmniej `min_share` (patrz `prune_reach_weeks`); wtedy sumy tygodni
+    trzeba podać w `totals_by_week`. Odsłuchy w okresach liczy potem `count_plays`."""
+    table = WeekTable(plays_by_week, start, end, params, totals_by_week)
+    weeks, plays, active = table.weeks, table.plays, table.active
+
+    # Najlepszy kandydat w każdym aktywnym tygodniu; remis rozstrzyga mniejsze id artysty.
+    # Tydzień bez kandydatów (wszystkich przycięto) i tak trafia do kwantyla: z udziałem
+    # zero, bo każdy jego artysta ma poniżej `min_share`, więc progu to nie zmienia.
     best: dict[int, tuple[int, float]] = {}
     for i in range(len(weeks)):
         if active[i]:
-            share, neg_id = max((table.smoothed(i, a), -a) for a in plays[i])
+            share, neg_id = max(((table.smoothed(i, a), -a) for a in plays[i]), default=(0.0, 0))
             best[i] = (-neg_id, share)
 
     threshold = params.min_share
@@ -152,11 +181,6 @@ def detect_eras(
             current = Block(artist_id, i, i, 1)
             blocks.append(current)
 
-    for block in blocks:
-        span = range(block.first, block.last + 1)
-        block.plays = sum(plays[j].get(block.artist_id, 0) for j in span)
-        block.share = block.plays / sum(totals[j] for j in span)
-
     silences: list[tuple[int, int]] = []
     run_start: int | None = None
     for i, is_active in enumerate([*active, True]):  # strażnik domyka ostatni ciąg
@@ -167,7 +191,7 @@ def detect_eras(
                 silences.append((run_start, i - 1))
             run_start = None
 
-    return Detection(
+    found = Detection(
         table=table,
         threshold=threshold,
         eras=[b for b in blocks if b.owned_weeks >= params.min_era_weeks],
@@ -176,24 +200,40 @@ def detect_eras(
         ],
         silences=silences,
     )
+    found.count_plays()
+    return found
 
 
-def stream_artists(found: Detection, limit: int = 10) -> list[int]:
+def prune_reach_weeks(params: EraParams) -> int:
+    """Promień przycinania wierszy przed wykrywaniem er.
+
+    Artysta wygrywa tydzień `i` tylko ze średnim udziałem ≥ `min_share` w oknie ±h tygodni
+    (h = połowa wygładzania), więc w tym oknie ma jakiś tydzień `k` z udziałem ≥ `min_share`.
+    Jego średnią liczymy z tygodni odległych od `k` najwyżej o 2h, więc wiersze artystów
+    bez takiego tygodnia w promieniu 2h nie zmieniają wyniku: ich średnie i tak są poniżej
+    progu. U osób słuchających szeroko zostaje ok. 5% wierszy."""
+    return 2 * (params.smoothing_weeks // 2)
+
+
+def stream_artists(
+    found: Detection, limit: int = 10, most_played: list[int] | None = None
+) -> list[int]:
     """Artyści do streamgraphu: najpierw wszyscy z er (od największej liczby odsłuchów
     w erach), potem dopełnienie najczęściej słuchanymi z całej historii. Ta kolejność
-    wyznacza też kolory na froncie, więc artyści z er dostają te same kolory co na osi."""
+    wyznacza też kolory na froncie, więc artyści z er dostają te same kolory co na osi.
+    `most_played` to gotowy ranking z bazy; bez niego liczymy go z tabeli tygodni."""
     era_plays: dict[int, int] = defaultdict(int)
     for era in found.eras:
         era_plays[era.artist_id] += era.plays
     chosen = sorted(era_plays, key=lambda a: (-era_plays[a], a))[:limit]
 
-    total_plays: dict[int, int] = defaultdict(int)
-    for week in found.table.plays:
-        for artist_id, plays in week.items():
-            total_plays[artist_id] += plays
-    rest = sorted(
-        (a for a in total_plays if a not in era_plays), key=lambda a: (-total_plays[a], a)
-    )
+    if most_played is None:
+        total_plays: dict[int, int] = defaultdict(int)
+        for week in found.table.plays:
+            for artist_id, plays in week.items():
+                total_plays[artist_id] += plays
+        most_played = sorted(total_plays, key=lambda a: (-total_plays[a], a))
+    rest = [a for a in most_played if a not in era_plays]
     return chosen + rest[: limit - len(chosen)]
 
 
@@ -261,7 +301,54 @@ class UserEras(BaseModel):
     streams: Streams
 
 
-_WEEKLY = text("SELECT week, artist_id, plays FROM weekly_artist_stats WHERE user_id = :user_id")
+_WEEK_TOTALS = text("""
+    SELECT week, sum(plays) AS total
+    FROM weekly_artist_stats
+    WHERE user_id = :user_id
+    GROUP BY week
+""")
+
+# Tylko wiersze, które mogą wpłynąć na wykrywanie er (patrz prune_reach_weeks): okno RANGE
+# na dacie tygodnia szuka największego udziału artysty w promieniu :reach tygodni
+_CANDIDATE_WEEKS = text("""
+    WITH totals AS (
+        SELECT week, sum(plays) AS total
+        FROM weekly_artist_stats
+        WHERE user_id = :user_id
+        GROUP BY week
+    ),
+    shares AS (
+        SELECT w.week, w.artist_id, w.plays,
+               max(w.plays::float8 / t.total) OVER (
+                   PARTITION BY w.artist_id
+                   ORDER BY w.week
+                   RANGE BETWEEN CAST(:reach AS interval) PRECEDING
+                             AND CAST(:reach AS interval) FOLLOWING
+               ) AS nearby_share
+        FROM weekly_artist_stats w
+        JOIN totals t USING (week)
+        WHERE w.user_id = :user_id
+    )
+    SELECT week, artist_id, plays FROM shares WHERE nearby_share >= :min_share
+""")
+
+# Pełna historia tygodniowa wybranych artystów: ery liczą z niej odsłuchy w okresach,
+# a streamgraph udziały w każdym tygodniu
+_ARTIST_WEEKS = text("""
+    SELECT week, artist_id, plays
+    FROM weekly_artist_stats
+    WHERE user_id = :user_id AND artist_id = ANY(:ids)
+""")
+
+_MOST_PLAYED = text("""
+    SELECT artist_id
+    FROM first_listen
+    WHERE user_id = :user_id
+    ORDER BY total_plays DESC, artist_id
+    LIMIT :limit
+""")
+
+STREAMS = 10
 
 _ARTISTS = text("SELECT id, name, image_url FROM artist WHERE id = ANY(:ids)")
 
@@ -329,10 +416,10 @@ def user_eras(db: Engine, username: str, params: EraParams = DEFAULT_PARAMS) -> 
     timezone = settings.app_timezone
     with Session(db) as session:
         user = find_imported_user(session, username)
-        plays_by_week: dict[date, dict[int, int]] = defaultdict(dict)
-        for week, artist_id, plays in session.execute(_WEEKLY, {"user_id": user.id}):
-            plays_by_week[week][artist_id] = plays
-        if not plays_by_week:
+        totals = {
+            row.week: row.total for row in session.execute(_WEEK_TOTALS, {"user_id": user.id})
+        }
+        if not totals:
             return UserEras(
                 username=user.username,
                 start=None,
@@ -344,11 +431,38 @@ def user_eras(db: Engine, username: str, params: EraParams = DEFAULT_PARAMS) -> 
                 streams=Streams(artists=[], weeks=[], shares=[]),
             )
 
-        start = min(plays_by_week)
-        end = max(max(plays_by_week), _current_week(timezone))
-        found = detect_eras(plays_by_week, start, end, params)
+        plays_by_week: dict[date, dict[int, int]] = defaultdict(dict)
+        candidates = session.execute(
+            _CANDIDATE_WEEKS,
+            {
+                "user_id": user.id,
+                "reach": f"{prune_reach_weeks(params)} weeks",
+                "min_share": params.min_share,
+            },
+        )
+        for week, artist_id, plays in candidates:
+            plays_by_week[week][artist_id] = plays
 
-        streamed = stream_artists(found)
+        start = min(totals)
+        end = max(max(totals), _current_week(timezone))
+        found = detect_eras(plays_by_week, start, end, params, totals)
+
+        # Pełne tygodnie artystów z er i kandydatów do streamgraphu, potem dokładne liczby.
+        # Ranking najczęściej słuchanych jest dłuższy o artystów z er, bo ich pomijamy.
+        era_artists = {b.artist_id for b in [*found.eras, *found.episodes]}
+        most_played = list(
+            session.scalars(_MOST_PLAYED, {"user_id": user.id, "limit": STREAMS + len(era_artists)})
+        )
+        full = sorted(era_artists | set(most_played[: STREAMS + len(era_artists)]))
+        found.table.add_rows(
+            [
+                (row.week, row.artist_id, row.plays)
+                for row in session.execute(_ARTIST_WEEKS, {"user_id": user.id, "ids": full})
+            ]
+        )
+        found.count_plays()
+
+        streamed = stream_artists(found, STREAMS, most_played)
         ids = sorted({b.artist_id for b in [*found.eras, *found.episodes]} | set(streamed))
         artists = {row.id: row for row in session.execute(_ARTISTS, {"ids": ids})}
 

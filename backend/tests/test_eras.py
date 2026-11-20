@@ -1,5 +1,6 @@
 """Testy wykrywania er: algorytm na sztucznych tygodniach i endpoint na bazie testowej."""
 
+import random
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 
@@ -9,7 +10,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from backend.aggregates import recompute_user_stats
-from backend.eras import detect_eras, stream_artists, stream_shares
+from backend.eras import Block, Detection, detect_eras, stream_artists, stream_shares
 from backend.main import app, get_db
 
 START = date(2024, 1, 1)  # poniedziałek
@@ -275,6 +276,105 @@ def test_era_details_top_five_and_first_play(client: TestClient, clean_db: Engin
     ]
     assert era["first_play_at"] == "2023-12-31T23:30:00Z"
     assert era["artist_first"] == {"track_name": "Utwór 7", "played_at": "2023-06-01T12:00:00Z"}
+
+
+def load_weekly_history(db: Engine, rows: list[tuple[int, int, int]]) -> None:
+    """Osoba z historią (numer tygodnia od START, artysta, odsłuchy); każdy artysta ma
+    jeden utwór o tym samym id, a odsłuchy są w środę tygodnia co sekundę."""
+    add_user(db, synced=True)
+    artists = sorted({artist for _, artist, _ in rows})
+    with db.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO artist (id, name, name_key) "
+                "SELECT a, 'Artysta ' || a, 'artysta ' || a FROM unnest(CAST(:ids AS bigint[])) a"
+            ),
+            {"ids": artists},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO track (id, artist_id, name, name_key) "
+                "SELECT a, a, 'Utwór ' || a, 'utwór ' || a FROM unnest(CAST(:ids AS bigint[])) a"
+            ),
+            {"ids": artists},
+        )
+        conn.execute(
+            text(
+                "INSERT INTO scrobble (user_id, played_at, track_id, artist_id) "
+                "SELECT 1, timestamptz '2024-01-03 12:00+00' + :week * interval '7 days' "
+                "       + (:artist * 60 + n) * interval '1 second', :artist, :artist "
+                "FROM generate_series(1, :plays) AS n"
+            ),
+            [{"week": w, "artist": a, "plays": n} for w, a, n in rows],
+        )
+    with Session(db) as session:
+        recompute_user_stats(session, 1)
+        session.commit()
+
+
+def assert_same_as_full_history(body: dict, rows: list[tuple[int, int, int]]) -> Detection:
+    """Endpoint czyta z bazy tylko część wierszy tygodniowych; jego wynik ma być taki sam
+    jak wykrywanie er na pełnej historii."""
+    full: dict[date, dict[int, int]] = {}
+    for w, artist, plays in rows:
+        full.setdefault(week(w), {})[artist] = plays
+    expected = detect_eras(full, START, date.fromisoformat(body["end"]) - timedelta(days=6))
+
+    def periods(blocks: list[Block]) -> list[tuple[str, int, int]]:
+        return [(str(expected.weeks[b.first]), b.artist_id, b.plays) for b in blocks]
+
+    def got(eras: list[dict]) -> list[tuple[str, int, int]]:
+        return [(e["start"], e["artist_id"], e["plays"]) for e in eras]
+
+    assert got(body["eras"]) == periods(expected.eras)
+    assert got(body["episodes"]) == periods(expected.episodes)
+    assert body["threshold"] == round(expected.threshold, 3)
+    streamed = stream_artists(expected)
+    assert [a["id"] for a in body["streams"]["artists"]] == streamed
+    assert body["streams"]["shares"] == stream_shares(expected, streamed)
+    return expected
+
+
+def test_pruned_rows_give_the_same_result_as_full_history(
+    client: TestClient, clean_db: Engine
+) -> None:
+    """Dane losowe, ale powtarzalne: szeroki gust, kilka obsesji i cicha przerwa."""
+    rng = random.Random(7)
+    # (artysta, tygodnie obsesji); artysta 3 wraca po przerwie
+    obsessions = [(3, range(6, 14)), (11, range(32, 40)), (7, range(40, 44)), (3, range(44, 50))]
+    rows = []
+    for w in range(52):
+        if 25 <= w < 30:
+            continue  # cisza
+        obsessed = {a for a, weeks in obsessions if w in weeks}
+        for artist in sorted(set(rng.sample(range(1, 61), 25)) | obsessed):
+            plays = rng.randint(1, 6) + (rng.randint(15, 40) if artist in obsessed else 0)
+            rows.append((w, artist, plays))
+    load_weekly_history(clean_db, rows)
+
+    body = client.get("/api/users/przykladowa/eras").json()
+
+    expected = assert_same_as_full_history(body, rows)
+    # dane naprawdę mają ery i epizody, więc porównanie coś znaczy
+    assert len(expected.eras) >= 2 and expected.episodes
+
+
+def test_small_shares_next_to_a_peak_still_count(client: TestClient, clean_db: Engine) -> None:
+    """Artysta R ma jeden mocny tydzień otoczony tygodniami z 2% udziału. Te słabe
+    tygodnie same nie przekraczają 5%, ale wchodzą do średnich sąsiadów i robią z R erę;
+    przycinanie nie może ich zgubić."""
+    r = 1201  # id zaraz po tle: odsłuchy są przesunięte o id minut, więc musi być małe
+    rows = []
+    for w in range(30):
+        # tło: co tydzień 40 nowych artystów po jednym odsłuchu, nikt nie dominuje
+        rows += [(w, w * 40 + k + 1, 1) for k in range(40)]
+    rows += [(10, r, 1), (11, r, 1), (12, r, 30), (13, r, 1), (14, r, 1)]
+    load_weekly_history(clean_db, rows)
+
+    body = client.get("/api/users/przykladowa/eras").json()
+
+    expected = assert_same_as_full_history(body, rows)
+    assert [(b.artist_id, b.first, b.last) for b in expected.eras] == [(r, 10, 14)]
 
 
 def test_eras_for_unknown_user(client: TestClient) -> None:
