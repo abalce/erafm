@@ -1,4 +1,5 @@
 import asyncio
+import datetime as dt
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -29,6 +30,7 @@ from .importer import (
     open_import,
 )
 from .stats import MAX_LIMIT, ImportInProgress, NotImported, UserStats, user_stats
+from .today import OnThisDay, on_this_day
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +152,22 @@ def eras(nick: str, db: Db) -> UserEras:
     """Ery artystów, krótsze epizody i okresy ciszy na osi całej historii."""
     try:
         return user_eras(db, normalize_username(nick))
+    except NotImported:
+        raise HTTPException(status_code=404, detail="not_imported") from None
+    except ImportInProgress:
+        raise HTTPException(status_code=409, detail="import_in_progress") from None
+
+
+@api.get("/users/{nick}/today")
+def today(nick: str, db: Db, date: str | None = None) -> OnThisDay:
+    """Ten sam dzień w poprzednich latach i rocznice pierwszego odsłuchu. Bez `date`
+    (RRRR-MM-DD) bierze dzisiejszą datę w strefie aplikacji."""
+    try:
+        day = dt.date.fromisoformat(date) if date is not None else None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_date") from None
+    try:
+        return on_this_day(db, normalize_username(nick), day)
     except NotImported:
         raise HTTPException(status_code=404, detail="not_imported") from None
     except ImportInProgress:

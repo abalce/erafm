@@ -90,3 +90,19 @@ export function formatDuration(fromIso: string, toIso: string): string {
 	];
 	return parts.filter(Boolean).join(' i ');
 }
+
+const dayMonthFormat = new Intl.DateTimeFormat('pl-PL', {
+	day: 'numeric',
+	month: 'long',
+	timeZone: 'UTC'
+});
+
+/** `2026-11-20` -> „20 listopada” */
+export function formatDayMonth(day: string): string {
+	return dayMonthFormat.format(new Date(day));
+}
+
+/** 1 -> „1 rok temu”, 3 -> „3 lata temu”, 6 -> „6 lat temu” */
+export function formatYearsAgo(years: number): string {
+	return `${formatCount(years, ['rok', 'lata', 'lat'])} temu`;
+}

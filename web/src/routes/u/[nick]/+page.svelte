@@ -12,6 +12,7 @@
 	import { formatDate, formatNumber } from '#lib/format.ts';
 	import { canRetry, errorMessage } from '#lib/messages.ts';
 	import MonthlyChart from '#lib/MonthlyChart.svelte';
+	import OnThisDay from '#lib/OnThisDay.svelte';
 	import TopList from '#lib/TopList.svelte';
 
 	// Co ile pytamy API o postęp importu
@@ -147,6 +148,9 @@
 	</section>
 
 	{#if totals.scrobbles > 0}
+		<!-- ?date=RRRR-MM-DD w adresie pokazuje inny dzień, np. na pokaz -->
+		<OnThisDay {nick} date={page.url.searchParams.get('date')} />
+
 		<section>
 			<h2>Odsłuchy miesiąc po miesiącu</h2>
 			<MonthlyChart data={view.stats.monthly} />

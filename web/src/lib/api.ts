@@ -1,7 +1,7 @@
 import { PUBLIC_API_URL } from '$app/env/public';
 
 // Kształty odpowiedzi API; ich źródłem są modele Pydantic w backendzie
-// (backend/src/backend/importer.py, stats.py i eras.py)
+// (backend/src/backend/importer.py, stats.py, eras.py i today.py)
 
 export type ImportState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -118,6 +118,40 @@ export interface UserEras {
 	streams: Streams;
 }
 
+export interface DayArtist {
+	name: string;
+	plays: number;
+}
+
+/** Ten sam dzień kalendarzowy w jednym z poprzednich lat */
+export interface YearAgo {
+	year: number;
+	years_ago: number;
+	/** np. `2023-11-20`; 29 lutego w roku nieprzestępnym to 28 lutego */
+	day: string;
+	plays: number;
+	top_artists: DayArtist[];
+	top_track: { name: string; artist_name: string; plays: number };
+}
+
+/** Artysta poznany w tym tygodniu kalendarzowym kilka lat temu */
+export interface Anniversary {
+	artist_id: number;
+	artist_name: string;
+	first_at: string;
+	years_ago: number;
+	first_track: string;
+	total_plays: number;
+}
+
+export interface OnThisDay {
+	username: string;
+	date: string;
+	/** Od najbliższego roku; tylko lata z odsłuchami */
+	years: YearAgo[];
+	anniversaries: Anniversary[];
+}
+
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
 export class ApiError extends Error {
 	readonly code: string;
@@ -172,4 +206,10 @@ export function getStats(nick: string): Promise<UserStats> {
 
 export function getEras(nick: string): Promise<UserEras> {
 	return request(`${userPath(nick)}/eras`);
+}
+
+/** „Tego dnia” na dziś albo na podany dzień (`RRRR-MM-DD`) */
+export function getToday(nick: string, date?: string | null): Promise<OnThisDay> {
+	const query = date ? `?date=${encodeURIComponent(date)}` : '';
+	return request(`${userPath(nick)}/today${query}`);
 }
