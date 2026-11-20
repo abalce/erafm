@@ -24,6 +24,7 @@ from .db import engine
 from .duet import Duet, duet
 from .eras import UserEras, user_eras
 from .friends import FriendSuggestion, user_friends
+from .genre_eras import UserGenreEras, user_genre_eras
 from .importer import (
     ImportQueueFull,
     ImportStatus,
@@ -244,6 +245,17 @@ async def recommend(
     if result.pending:
         await worker.defer_similar(username)
     return result
+
+
+@api.get("/users/{nick}/genre-eras")
+def genre_eras(nick: str, db: Db) -> UserGenreEras:
+    """Ery gatunkowe: okresy, w których przeważał jeden gatunek (tag Last.fm)."""
+    try:
+        return user_genre_eras(db, normalize_username(nick))
+    except NotImported:
+        raise HTTPException(status_code=404, detail="not_imported") from None
+    except ImportInProgress:
+        raise HTTPException(status_code=409, detail="import_in_progress") from None
 
 
 app.include_router(api)

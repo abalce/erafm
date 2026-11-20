@@ -2,7 +2,7 @@ import { PUBLIC_API_URL } from '$app/env/public';
 
 // Kształty odpowiedzi API; ich źródłem są modele Pydantic w backendzie
 // (backend/src/backend/importer.py, stats.py, eras.py, today.py, duet.py, infection.py,
-// compat.py, artist.py, friends.py i recommend.py)
+// compat.py, artist.py, friends.py, recommend.py i genre_eras.py)
 
 export type ImportState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -274,6 +274,28 @@ export interface Recommendations {
 	items: Recommendation[];
 }
 
+/** Era gatunkowa: okres, w którym przeważał jeden gatunek (tag Last.fm) */
+export interface GenreEra {
+	tag: string;
+	start: string;
+	end: string;
+	/** Odsłuchy przypisane gatunkowi w okresie (po ważeniu tagów) */
+	plays: number;
+	share: number;
+	/** Artyści, którzy w tym okresie najbardziej „robili” ten gatunek */
+	top_artists: { artist_id: number; name: string; plays: number }[];
+}
+
+export interface UserGenreEras {
+	username: string;
+	start: string | null;
+	end: string | null;
+	threshold: number;
+	eras: GenreEra[];
+	episodes: GenreEra[];
+	silences: Silence[];
+}
+
 /** Błąd z API. `code` to kod w snake_case z backendu; polskie teksty są w `messages.ts`. */
 export class ApiError extends Error {
 	readonly code: string;
@@ -357,4 +379,8 @@ export function getRecommendations(
 	const query = new URLSearchParams({ popularity });
 	if (tag) query.set('tag', tag);
 	return request(`${userPath(nick)}/recommendations?${query}`);
+}
+
+export function getGenreEras(nick: string): Promise<UserGenreEras> {
+	return request(`${userPath(nick)}/genre-eras`);
 }

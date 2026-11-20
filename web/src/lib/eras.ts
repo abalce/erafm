@@ -1,4 +1,4 @@
-import type { Era, UserEras } from '#lib/api.ts';
+import type { Era, GenreEra, UserEras, UserGenreEras } from '#lib/api.ts';
 
 export type EraKind = 'era' | 'episode';
 
@@ -6,8 +6,11 @@ export type EraKind = 'era' | 'episode';
 export interface EraItem {
 	key: string;
 	kind: EraKind;
+	/** Dla er gatunkowych: pola wspólne (nazwa, daty, odsłuchy), reszta pusta */
 	era: Era;
 	color: string;
+	/** Tylko w erach gatunkowych: pełne dane okresu */
+	genre?: GenreEra;
 }
 
 /** Strumień jednego artysty w streamgraphie */
@@ -96,4 +99,48 @@ export function duetColors(people: UserEras[]): Map<number, string> {
 		}
 	}
 	return new Map(order.slice(0, PALETTE_SIZE).map((id, i) => [id, `var(--era-${i + 1})`]));
+}
+
+/**
+ * Ery gatunkowe w tym samym kształcie co ery artystów, żeby oś czasu i lista działały bez
+ * zmian. Kolory dostają gatunki z er, od największej liczby odsłuchów; 10 kolorów bez
+ * zawijania, reszta (także gatunki z samymi epizodami) jest szara.
+ */
+export function genreItems(data: UserGenreEras): EraItem[] {
+	const plays = new Map<string, number>();
+	for (const era of data.eras) plays.set(era.tag, (plays.get(era.tag) ?? 0) + era.plays);
+	const ranked = [...plays.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+	const colors = new Map(
+		ranked.slice(0, PALETTE_SIZE).map(([tag], i) => [tag, `var(--era-${i + 1})`])
+	);
+	const tagIds = new Map<string, number>();
+	const items = [
+		...data.eras.map((genre) => ({ kind: 'era' as const, genre })),
+		...data.episodes.map((genre) => ({ kind: 'episode' as const, genre }))
+	].map(({ kind, genre }) => {
+		// Ujemne id: nie myli się z artystami (np. przy podświetlaniu strumieni)
+		const id = tagIds.get(genre.tag) ?? -(tagIds.size + 1);
+		tagIds.set(genre.tag, id);
+		const era: Era = {
+			artist_id: id,
+			artist_name: genre.tag,
+			image_url: null,
+			start: genre.start,
+			end: genre.end,
+			plays: genre.plays,
+			share: genre.share,
+			first_play_at: genre.start,
+			last_play_at: genre.end,
+			top_tracks: [],
+			artist_first: { track_name: '', played_at: genre.start }
+		};
+		return {
+			key: `${kind}:${genre.start}`,
+			kind,
+			era,
+			genre,
+			color: colors.get(genre.tag) ?? OTHER
+		};
+	});
+	return items.sort((a, b) => a.era.start.localeCompare(b.era.start));
 }

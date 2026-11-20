@@ -58,8 +58,9 @@
 	const EPISODE_HEIGHT = 20;
 	const STREAM_TOP = 72;
 	const STREAM_BOTTOM = 222;
-	const AXIS_Y = 232;
-	const HEIGHT = 258;
+	// Bez strumieni (np. ery gatunkowe) podziałka stoi tuż pod pasami er
+	const AXIS_Y = $derived(streams.length > 0 ? 232 : 70);
+	const HEIGHT = $derived(AXIS_Y + 26);
 
 	const uid = $props.id();
 	let svg: SVGSVGElement | undefined = $state();
@@ -321,7 +322,7 @@
 <style>
 	.timeline {
 		position: relative;
-		min-height: 258px;
+		min-height: 96px;
 		cursor: grab;
 	}
 

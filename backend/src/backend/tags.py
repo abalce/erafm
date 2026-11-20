@@ -42,6 +42,16 @@ IGNORED_TAGS = frozenset(
     }
 )
 
+# Klucz tagu bez myślników, podkreśleń i spacji: „k-pop”, „kpop” i „K Pop” to ten sam gatunek.
+# Ten sam wzór w SQL: regexp_replace(lower(name), TAG_KEY_STRIP, '', 'g')
+TAG_KEY_STRIP = "[-_ ]"
+_TAG_KEY_STRIP = re.compile(TAG_KEY_STRIP)
+
+
+def tag_key(name: str) -> str:
+    return _TAG_KEY_STRIP.sub("", name.strip().lower())
+
+
 # Dekady i lata: „80s”, „1990s”, „00s”
 DECADE_PATTERN = r"^[0-9]{2}([0-9]{2})?s$"
 _DECADE = re.compile(DECADE_PATTERN)

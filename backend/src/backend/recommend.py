@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from .similar import DEFAULT_SEEDS, SeedParams, seeds_of
 from .stats import find_imported_user
-from .tags import is_genre_tag
+from .tags import is_genre_tag, tag_key
 
 
 class Popularity(StrEnum):
@@ -147,14 +147,20 @@ def recommendations(
                 },
             ).all()
 
+        # Tagi po kluczu (k-pop = kpop); do wyświetlenia najczęstsza pisownia w puli
         tags_of: dict[int, set[str]] = {row.artist_id: set() for row in pool}
+        spellings: dict[str, Counter[str]] = {}
         if pool:
             for artist_id, name in session.execute(
                 _TAGS, {"ids": list(tags_of), "min_weight": params.tag_min_weight}
             ):
-                tags_of[artist_id].add(name)
+                if is_genre_tag(name):
+                    key = tag_key(name)
+                    tags_of[artist_id].add(key)
+                    spellings.setdefault(key, Counter())[name] += 1
 
-        counts = Counter(name for names in tags_of.values() for name in names if is_genre_tag(name))
+        counts = Counter(key for keys in tags_of.values() for key in keys)
+        wanted = tag_key(tag) if tag else None
         items = [
             Recommendation(
                 artist_id=row.artist_id,
@@ -164,7 +170,8 @@ def recommendations(
                 because=row.because,
             )
             for row in pool
-            if in_band(row.listeners, popularity) and (tag is None or tag in tags_of[row.artist_id])
+            if in_band(row.listeners, popularity)
+            and (wanted is None or wanted in tags_of[row.artist_id])
         ][: params.top]
 
         return Recommendations(
@@ -175,8 +182,9 @@ def recommendations(
             pending=len(seeds) - len(ready),
             missing_data=sum(1 for row in pool if not row.enriched),
             # Remisy alfabetycznie, żeby lista nie skakała między odświeżeniami
-            tags=[name for name, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))][
-                : params.tags_shown
-            ],
+            tags=[
+                spellings[key].most_common(1)[0][0]
+                for key, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            ][: params.tags_shown],
             items=items,
         )

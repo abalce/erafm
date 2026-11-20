@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { ApiError, getEras, type UserEras } from '#lib/api.ts';
+	import { ApiError, getEras, getGenreEras, type UserEras, type UserGenreEras } from '#lib/api.ts';
 	import EraTimeline from '#lib/EraTimeline.svelte';
-	import { artistColors, eraItems, streamSeries, type EraItem } from '#lib/eras.ts';
+	import { artistColors, eraItems, genreItems, streamSeries, type EraItem } from '#lib/eras.ts';
 	import {
 		formatDate,
 		formatDay,
@@ -17,23 +18,33 @@
 	import TopList from '#lib/TopList.svelte';
 
 	type View =
-		{ kind: 'loading' } | { kind: 'ready'; data: UserEras } | { kind: 'error'; code: string };
+		| { kind: 'loading' }
+		| { kind: 'ready'; mode: 'artists'; data: UserEras }
+		| { kind: 'ready'; mode: 'genres'; data: UserGenreEras }
+		| { kind: 'error'; code: string };
 
 	const nick = $derived(page.params.nick ?? '');
+	// Widok żyje w adresie (?widok=gatunki), więc „wstecz” wraca do artystów
+	const mode = $derived(page.url.searchParams.get('widok') === 'gatunki' ? 'genres' : 'artists');
 	let view = $state<View>({ kind: 'loading' });
 	let attempt = $state(0);
 	let selected = $state<string | null>(null);
 
 	$effect(() => {
 		const current = nick;
+		const currentMode = mode;
 		void attempt;
 		let cancelled = false;
 		view = { kind: 'loading' };
 		selected = null;
 
-		getEras(current)
-			.then((data) => {
-				if (!cancelled) view = { kind: 'ready', data };
+		const request: Promise<View> =
+			currentMode === 'genres'
+				? getGenreEras(current).then((data) => ({ kind: 'ready', mode: 'genres', data }))
+				: getEras(current).then((data) => ({ kind: 'ready', mode: 'artists', data }));
+		request
+			.then((ready) => {
+				if (!cancelled) view = ready;
 			})
 			.catch((error: unknown) => {
 				if (cancelled) return;
@@ -46,10 +57,31 @@
 	});
 
 	const colors = $derived(
-		view.kind === 'ready' ? artistColors(view.data) : new Map<number, string>()
+		view.kind === 'ready' && view.mode === 'artists'
+			? artistColors(view.data)
+			: new Map<number, string>()
 	);
-	const items = $derived(view.kind === 'ready' ? eraItems(view.data, colors) : []);
-	const streams = $derived(view.kind === 'ready' ? streamSeries(view.data, colors) : []);
+	const items = $derived(
+		view.kind !== 'ready'
+			? []
+			: view.mode === 'artists'
+				? eraItems(view.data, colors)
+				: genreItems(view.data)
+	);
+	// Streamgraph tylko dla artystów: ery gatunkowe mają samą oś i listę
+	const streams = $derived(
+		view.kind === 'ready' && view.mode === 'artists' ? streamSeries(view.data, colors) : []
+	);
+	const weeks = $derived(
+		view.kind === 'ready' && view.mode === 'artists' ? view.data.streams.weeks : []
+	);
+
+	function showMode(next: 'artists' | 'genres') {
+		const suffix = next === 'genres' ? '?widok=gatunki' : '';
+		// resolve() zna tylko ścieżki, a widok żyje w parametrze adresu, więc dokładamy go ręcznie
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		goto(`${resolve('/u/[nick]/ery', { nick })}${suffix}`, { reset: false });
+	}
 	const eras = $derived(items.filter((item) => item.kind === 'era'));
 	const episodes = $derived(items.filter((item) => item.kind === 'episode'));
 
@@ -68,6 +100,7 @@
 	}
 
 	function itemName(item: EraItem): string {
+		if (item.genre) return item.kind === 'era' ? `Okres ${item.genre.tag}` : item.genre.tag;
 		return item.kind === 'era' ? `Era ${item.era.artist_name}` : item.era.artist_name;
 	}
 </script>
@@ -91,7 +124,33 @@
 					<span class="name">{itemName(item)}</span>
 					<span class="when muted">{formatMonthRange(era.start, era.end)}</span>
 				</button>
-				{#if item.key === selected}
+				{#if item.key === selected && item.genre}
+					{@const genre = item.genre}
+					<dl class="details">
+						<div>
+							<dt>Okres</dt>
+							<dd>{formatDay(genre.start)} – {formatDay(genre.end)}</dd>
+						</div>
+						<div>
+							<dt>Odsłuchy tego gatunku</dt>
+							<dd>
+								ok. {formatPlays(genre.plays)}, czyli {formatPercent(genre.share)} wszystkich w tym czasie
+							</dd>
+						</div>
+						<div>
+							<dt>Artyści tego gatunku w tym czasie</dt>
+							<dd class="tracks">
+								<TopList
+									items={genre.top_artists.map((artist) => ({
+										id: artist.artist_id,
+										name: artist.name,
+										plays: artist.plays
+									}))}
+								/>
+							</dd>
+						</div>
+					</dl>
+				{:else if item.key === selected}
 					<dl class="details">
 						<div>
 							<dt>Okres</dt>
@@ -141,7 +200,19 @@
 
 <section>
 	<h1>{nick}</h1>
-	<p class="lead">Okresy, w których jeden artysta wyraźnie przeważał nad resztą.</p>
+	<p class="lead">
+		{mode === 'genres'
+			? 'Okresy, w których jeden gatunek wyraźnie przeważał nad resztą.'
+			: 'Okresy, w których jeden artysta wyraźnie przeważał nad resztą.'}
+	</p>
+	<div class="modes" role="group" aria-label="Rodzaj er">
+		<button type="button" aria-pressed={mode === 'artists'} onclick={() => showMode('artists')}
+			>Artyści</button
+		>
+		<button type="button" aria-pressed={mode === 'genres'} onclick={() => showMode('genres')}
+			>Gatunki</button
+		>
+	</div>
 </section>
 
 {#if view.kind === 'loading'}
@@ -167,7 +238,7 @@
 			{items}
 			silences={view.data.silences}
 			{streams}
-			weeks={view.data.streams.weeks}
+			{weeks}
 			start={view.data.start}
 			end={view.data.end}
 			{selected}
@@ -182,7 +253,8 @@
 
 	{#if items.length === 0}
 		<p class="muted">
-			Nie widać tu wyraźnych er: słuchanie rozkłada się równo między wielu artystów.
+			Nie widać tu wyraźnych er: słuchanie rozkłada się równo między wiele
+			{mode === 'genres' ? 'gatunków' : 'artystów'}.
 		</p>
 	{/if}
 
@@ -214,6 +286,31 @@
 	h2 {
 		margin-bottom: var(--space-4);
 		font-size: 1.375rem;
+	}
+
+	.modes {
+		display: inline-flex;
+		margin-top: var(--space-4);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-small);
+		overflow: hidden;
+	}
+
+	.modes button {
+		padding: var(--space-2) var(--space-5);
+		border: none;
+		background: var(--surface);
+		cursor: pointer;
+	}
+
+	.modes button + button {
+		border-left: 1px solid var(--border);
+	}
+
+	.modes button[aria-pressed='true'] {
+		background: var(--accent);
+		color: var(--on-accent);
+		font-weight: 600;
 	}
 
 	.lead {
