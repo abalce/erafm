@@ -34,7 +34,7 @@ from .importer import (
     open_import,
 )
 from .lastfm import LastfmError, UserNotFound
-from .recommend import Recommendations, recommendations
+from .recommend import Popularity, Recommendations, recommendations
 from .stats import MAX_LIMIT, ImportInProgress, NotImported, UserStats, user_stats
 from .today import OnThisDay, on_this_day
 
@@ -225,12 +225,18 @@ async def friends(nick: str, db: Db) -> list[FriendSuggestion]:
 
 
 @api.get("/users/{nick}/recommendations")
-async def recommend(nick: str, db: Db) -> Recommendations:
-    """Rekomendacje nowych artystów z uzasadnieniem. Gdy części ziaren brakuje podobnych
+async def recommend(
+    nick: str, db: Db, popularity: str = Popularity.ALL, tag: str | None = None
+) -> Recommendations:
+    """Rekomendacje nowych artystów z uzasadnieniem. `popularity` to pozycja suwaka
+    (known, all, lesser, niche), `tag` to filtr gatunku. Gdy części ziaren brakuje podobnych
     artystów, zleca ich pobranie i zwraca wynik z tego, co już jest (`pending` > 0)."""
     username = normalize_username(nick)
+    if popularity not in Popularity:
+        raise HTTPException(status_code=422, detail="invalid_popularity")
+    tag = (tag or "").strip().lower() or None
     try:
-        result = await asyncio.to_thread(recommendations, db, username)
+        result = await asyncio.to_thread(recommendations, db, username, Popularity(popularity), tag)
     except NotImported:
         raise HTTPException(status_code=404, detail="not_imported") from None
     except ImportInProgress:

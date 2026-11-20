@@ -17,8 +17,9 @@ from backend import worker
 from backend.aggregates import recompute_user_stats
 from backend.lastfm import LastfmClient
 from backend.main import app, get_db
-from backend.recommend import recommendations
+from backend.recommend import Popularity, recommendations
 from backend.similar import run_similar
+from backend.tags import is_genre_tag
 
 LAST = datetime(2025, 6, 1, 12, tzinfo=UTC)  # ostatni scrobble osoby
 LONG_AGO = LAST - timedelta(days=200)  # poza oknem 90 dni ziaren
@@ -142,6 +143,76 @@ def test_seed_without_similar_is_pending(clean_db: Engine) -> None:
     assert [r.name for r in result.items] == ["X"]
 
 
+def enrich(db: Engine, name: str, listeners: int | None, tags: dict[str, int]) -> None:
+    """Dane z Last.fm dla kandydata: słuchacze i tagi z wagą."""
+    with db.begin() as conn:
+        conn.execute(
+            text("UPDATE artist SET listeners = :l, enriched_at = now() WHERE name = :n"),
+            {"l": listeners, "n": name},
+        )
+        for tag, weight in tags.items():
+            conn.execute(
+                text("INSERT INTO tag (name) VALUES (:t) ON CONFLICT (name) DO NOTHING"), {"t": tag}
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO artist_tag (artist_id, tag_id, weight) "
+                    "SELECT a.id, t.id, :w FROM artist a, tag t WHERE a.name = :n AND t.name = :t"
+                ),
+                {"n": name, "t": tag, "w": weight},
+            )
+
+
+def pool(db: Engine) -> None:
+    """Pięciu kandydatów z różną liczbą słuchaczy i tagami; „Nowy” bez danych z Last.fm."""
+    history(db)
+    add_similar(
+        db,
+        [
+            ("A", "Gwiazda", 1.0),
+            ("A", "Średni", 0.9),
+            ("A", "Mniejszy", 0.8),
+            ("A", "Niszowy", 0.7),
+            ("A", "Nowy", 0.6),
+        ],
+        fetched=["A", "B"],
+    )
+    enrich(db, "Gwiazda", 5_000_000, {"pop": 100, "female vocalists": 90, "80s": 80})
+    enrich(db, "Średni", 600_000, {"pop": 100, "shoegaze": 20})
+    enrich(db, "Mniejszy", 300_000, {"shoegaze": 100, "seen live": 50})
+    enrich(db, "Niszowy", 40_000, {"shoegaze": 60, "polish": 30})
+
+
+@pytest.mark.parametrize(
+    ("popularity", "expected"),
+    [
+        (Popularity.ALL, ["Gwiazda", "Średni", "Mniejszy", "Niszowy", "Nowy"]),
+        (Popularity.KNOWN, ["Gwiazda"]),
+        (Popularity.LESSER, ["Mniejszy", "Niszowy"]),  # 300 tys. to jeszcze „mniej znany”
+        (Popularity.NICHE, ["Niszowy"]),
+    ],
+)
+def test_popularity_bands(clean_db: Engine, popularity: Popularity, expected: list[str]) -> None:
+    pool(clean_db)
+
+    result = recommendations(clean_db, "ala", popularity)
+
+    assert [r.name for r in result.items] == expected
+    assert result.missing_data == 1  # „Nowy” nie ma jeszcze danych
+
+
+def test_tag_filter_and_tag_list(clean_db: Engine) -> None:
+    pool(clean_db)
+
+    result = recommendations(clean_db, "ala", tag="shoegaze")
+
+    # Średni ma shoegaze z wagą 20, poniżej progu 25
+    assert [r.name for r in result.items] == ["Mniejszy", "Niszowy"]
+    # pop i shoegaze mają po dwóch kandydatów (remis alfabetycznie); bez tagów, które nie
+    # są gatunkami („female vocalists”, „seen live”, „80s”)
+    assert result.tags == ["pop", "shoegaze", "polish"]
+
+
 # --- endpoint ---
 
 
@@ -171,7 +242,16 @@ def test_endpoint_queues_missing_similar(
     response = client.get("/api/users/Ala/recommendations")
 
     assert response.status_code == 200
-    assert response.json() == {"username": "ala", "seeds": 2, "pending": 2, "items": []}
+    assert response.json() == {
+        "username": "ala",
+        "popularity": "all",
+        "tag": None,
+        "seeds": 2,
+        "pending": 2,
+        "missing_data": 0,
+        "tags": [],
+        "items": [],
+    }
     assert queued(queue) == [("backend.worker.fetch_similar", {"username": "ala"})]
 
 
@@ -185,6 +265,19 @@ def test_endpoint_with_everything_ready_queues_nothing(
 
     assert [(r["name"], r["because"]) for r in body["items"]] == [("X", ["A"])]
     assert queued(queue) == []
+
+
+def test_endpoint_parameters(client: TestClient, clean_db: Engine) -> None:
+    pool(clean_db)
+
+    body = client.get(
+        "/api/users/ala/recommendations", params={"popularity": "niche", "tag": " Shoegaze "}
+    ).json()
+
+    assert (body["popularity"], body["tag"]) == ("niche", "shoegaze")
+    assert [r["name"] for r in body["items"]] == ["Niszowy"]
+    response = client.get("/api/users/ala/recommendations", params={"popularity": "bardzo"})
+    assert (response.status_code, response.json()) == (422, {"detail": "invalid_popularity"})
 
 
 def test_endpoint_for_unknown_person(client: TestClient) -> None:
@@ -265,3 +358,19 @@ async def test_run_similar_skips_fresh_seeds_and_keeps_failed_for_later(
     assert set(asked) == {"B"}  # A ma świeże dane
     with clean_db.connect() as conn:
         assert conn.scalar(text("SELECT similar_fetched_at FROM artist WHERE name = 'B'")) is None
+
+
+@pytest.mark.parametrize(
+    ("tag", "genre"),
+    [
+        ("shoegaze", True),
+        ("Polish", True),
+        ("seen live", False),
+        ("Female Vocalists", False),
+        ("80s", False),
+        ("1990s", False),
+        ("", False),
+    ],
+)
+def test_genre_tags(tag: str, genre: bool) -> None:
+    assert is_genre_tag(tag) is genre
